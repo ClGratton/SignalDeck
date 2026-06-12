@@ -1,0 +1,96 @@
+.brand {
+  position: fixed;
+  top: var(--pad-y);
+  left: var(--pad-x);
+  z-index: var(--z-header);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-strong);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  opacity: 1;
+  /* Fades out/in when relocating into the login card (no positional glide). */
+  transition: opacity var(--dur) var(--ease-out-quart);
+}
+.brand[data-dim='true'] {
+  opacity: 0;
+}
+.brand[data-home='true'] {
+  cursor: default;
+}
+
+/* The "bubble" is a pseudo-element that fades in AROUND the wordmark, expanding
+   outward via negative inset — so the glyph and text never move; their centers
+   stay put through the morph. */
+.brand::before {
+  content: '';
+  position: absolute;
+  inset: -5px -11px;
+  z-index: -1;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+  opacity: 0;
+  transform: scale(0.94);
+  transform-origin: 14px center; /* grow from over the glyph, not the center */
+  transition:
+    opacity var(--dur) var(--ease-out-quart),
+    transform var(--dur-slow) var(--ease-out-quint),
+    background var(--dur) var(--ease-out-quart),
+    border-color var(--dur) var(--ease-out-quart);
+}
+.brand[data-home='false']:not([data-logo='true'])::before {
+  opacity: 1;
+  transform: scale(1);
+}
+.brand[data-home='false']:not([data-logo='true']):hover::before {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.glyph {
+  width: 24px;
+  height: auto;
+  flex: none;
+  color: var(--primary-ink);
+  overflow: visible;
+}
+/* Source pulse with 3 extra points (13,5.5)(13.5,7.25)(14,9), all sitting exactly
+   on segment 2 so the pulse looks unchanged. They free the vertices the arrow
+   needs WITHOUT moving anything from x14 rightward: the whole right half
+   (14,9 -> 16,16 -> 19.5,6 -> 22,9 -> 31,9 = shaft end, trough V, peak ^, tail)
+   is identical in both states and stays perfectly intact through the morph. */
+.glyphPath {
+  d: path('M1 9 L9 9 L12 2 L13 5.5 L13.5 7.25 L14 9 L16 16 L19.5 6 L22 9 L31 9');
+  transition: d var(--dur-slow) var(--ease-out-quart);
+}
+/* "<-" + the untouched pulse blip. The morph anchors the LEFT END in place: the
+   first point stays at the centerline as the tip (it does NOT fly up), while only
+   the spike (the small-up + upper-down) folds into the chevron — tip -> upper-barb
+   -> (back) tip -> lower-barb -> (back) tip -> straight shaft along the centerline.
+   The returns overlap the strokes, so the chevron reads as a clean open "<" with the
+   shaft leaving the tip's center. Everything from x14 on is the original pulse. */
+.brand[data-home='false']:not([data-logo='true']) .glyphPath {
+  d: path('M2 9 L10 4 L2 9 L10 14 L2 9 L14 9 L16 16 L19.5 6 L22 9 L31 9');
+}
+
+.label {
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand,
+  .brand::before,
+  .glyphPath {
+    transition: none;
+  }
+}

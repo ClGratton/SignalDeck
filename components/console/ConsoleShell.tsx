@@ -1,0 +1,191 @@
+'use client';
+
+// The operator console: header, live panel grid, collapsible assistant sidebar.
+// Polls the privileged /api/console snapshot; the page passes whatever the
+// server had cached so first paint is instant.
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Bot, PanelRightOpen, Settings } from 'lucide-react';
+import type { ConsoleSnapshot } from '@/lib/console';
+import type { AssistantProvider } from '@/lib/assistant/types';
+import { signOut, signOutEverywhere } from '@/app/dashboard/actions';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { RevealProvider } from './RevealProvider';
+import { SettingsPanel } from './SettingsPanel';
+import {
+  ComputePanel,
+  StoragePanel,
+  MediaPanel,
+  AutomationPanel,
+  TrafficPanel,
+  HistoryStrip,
+} from './panels';
+import { AssistantSidebar } from './AssistantSidebar';
+import styles from './console.module.css';
+
+const POLL_MS = 12_000;
+const SIDEBAR_KEY = 'grtlabs:assistant-open';
+
+export function ConsoleShell({
+  initial,
+  assistantProvider,
+  twoFactor,
+}: {
+  initial: ConsoleSnapshot | null;
+  assistantProvider: AssistantProvider | null;
+  twoFactor: boolean;
+}) {
+  const [snapshot, setSnapshot] = useState<ConsoleSnapshot | null>(initial);
+  const [stale, setStale] = useState(false);
+  // Desktop: sidebar docked in the grid, collapse remembered. Mobile: overlay.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(SIDEBAR_KEY);
+    if (saved != null) setSidebarOpen(saved === '1');
+  }, []);
+
+  const poll = useCallback(async () => {
+    try {
+      const res = await fetch('/api/console', { cache: 'no-store' });
+      if (!res.ok) throw new Error(String(res.status));
+      setSnapshot((await res.json()) as ConsoleSnapshot);
+      setStale(false);
+    } catch {
+      setStale(true); // keep showing the last snapshot, marked stale
+    }
+  }, []);
+
+  useEffect(() => {
+    void poll();
+    const tick = () => {
+      timer.current = window.setTimeout(async () => {
+        if (document.visibilityState === 'visible') await poll();
+        tick();
+      }, POLL_MS);
+    };
+    tick();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void poll();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearTimeout(timer.current);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [poll]);
+
+  const toggleSidebar = (open: boolean) => {
+    setSidebarOpen(open);
+    window.localStorage.setItem(SIDEBAR_KEY, open ? '1' : '0');
+  };
+
+  // The mobile drawer lives inside this page's stacking context, so it cannot
+  // layer above the global BrandNav pill — hide the pill while the drawer is
+  // open instead (global rule in globals.css keyed on this attribute).
+  useEffect(() => {
+    document.documentElement.toggleAttribute('data-assistant-drawer', drawerOpen);
+    return () => document.documentElement.removeAttribute('data-assistant-drawer');
+  }, [drawerOpen]);
+
+  const loading = snapshot == null;
+
+  return (
+    <RevealProvider twoFactor={twoFactor}>
+    <div className={styles.wrap} data-sidebar={sidebarOpen || undefined}>
+      <header className={styles.bar}>
+        {/* The persistent BrandNav pill floats at the top-left corner and IS the
+            brand here (and the way back home) — the bar only adds the context
+            tag after it, offset to clear the pill. */}
+        <span className={styles.barLeft}>
+          <span className={`${styles.tag} mono`}>console</span>
+          {stale ? <span className={`${styles.stale} mono`}>reconnecting…</span> : null}
+        </span>
+        <div className={styles.barRight}>
+          <ThemeToggle />
+          <button
+            type="button"
+            className={styles.iconAction}
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Backend settings"
+            title="Backend credentials"
+          >
+            <Settings size={16} strokeWidth={2.2} aria-hidden />
+          </button>
+          <form action={signOut}>
+            <button type="submit" className={styles.signout}>
+              Sign out
+            </button>
+          </form>
+          <form action={signOutEverywhere}>
+            <button
+              type="submit"
+              className={styles.signout}
+              title="Invalidate every session on every device"
+            >
+              Sign out everywhere
+            </button>
+          </form>
+          {!sidebarOpen ? (
+            <button
+              type="button"
+              className={styles.assistantOpen}
+              onClick={() => toggleSidebar(true)}
+              aria-label="Show assistant"
+            >
+              <PanelRightOpen size={16} strokeWidth={2.2} aria-hidden />
+              <span>Operator</span>
+            </button>
+          ) : null}
+        </div>
+      </header>
+
+      <div className={styles.body}>
+        <main className={styles.grid} aria-label="Homelab panels">
+          <ComputePanel data={snapshot?.proxmox ?? null} loading={loading} />
+          <StoragePanel data={snapshot?.truenas ?? null} loading={loading} />
+          <MediaPanel data={snapshot?.jellyfin ?? null} loading={loading} />
+          <AutomationPanel data={snapshot?.homeassistant ?? null} loading={loading} />
+          <TrafficPanel />
+          <HistoryStrip />
+        </main>
+
+        <div className={styles.sidebarSlot}>
+          <AssistantSidebar
+            provider={assistantProvider}
+            open={drawerOpen}
+            onClose={() => {
+              // Mobile closes the drawer; desktop collapses (and remembers it).
+              if (window.matchMedia('(max-width: 1100px)').matches) setDrawerOpen(false);
+              else toggleSidebar(false);
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Mobile: floating assistant button + scrim for the drawer */}
+      <button
+        type="button"
+        className={styles.fab}
+        onClick={() => setDrawerOpen(true)}
+        aria-label="Open assistant"
+      >
+        <Bot size={20} strokeWidth={2.2} aria-hidden />
+      </button>
+      {drawerOpen ? (
+        <button
+          type="button"
+          className={styles.scrim}
+          onClick={() => setDrawerOpen(false)}
+          aria-label="Close assistant"
+        />
+      ) : null}
+
+      {settingsOpen ? <SettingsPanel onClose={() => setSettingsOpen(false)} /> : null}
+    </div>
+    </RevealProvider>
+  );
+}

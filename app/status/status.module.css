@@ -1,0 +1,59 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end; /* left back-button is the persistent layout BrandNav */
+  gap: var(--space-sm);
+  min-height: 34px;
+  padding: var(--pad-y) var(--pad-x);
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-lg);
+  padding: var(--space-lg) var(--pad-x) var(--space-xl);
+}
+.intro {
+  width: 100%;
+  max-width: 64rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+}
+.title {
+  font-size: var(--text-xl);
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  color: var(--ink-strong);
+}
+.sub {
+  font-size: var(--text-md);
+  color: var(--muted);
+  text-wrap: pretty;
+}
+
+@media (max-width: 640px) {
+  /* Tighten the stack above the calendar so all six week-rows clear the fold.
+     Header keeps its top pad so the fixed BrandNav doesn't overlap the title. */
+  .header {
+    padding: var(--pad-y) var(--pad-x) var(--space-2xs);
+  }
+  .main {
+    padding: var(--space-2xs) var(--pad-x) var(--space-lg);
+    gap: var(--space-sm);
+  }
+  .title {
+    font-size: var(--text-lg);
+  }
+  .sub {
+    font-size: var(--text-sm);
+  }
+}

@@ -1,0 +1,298 @@
+.wrap {
+  width: 100%;
+  max-width: 64rem;
+}
+
+/* ---- Which layout shows ---- */
+.mobileView {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+.desktopView {
+  display: none;
+}
+@media (min-width: 961px) {
+  .mobileView {
+    display: none;
+  }
+  .desktopView {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+}
+
+/* ---- Service selector (mobile only) ---- */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  padding: var(--space-3xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.tab {
+  flex: 1 1 auto;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease-out-quart),
+    color var(--dur) var(--ease-out-quart);
+}
+.tab:hover {
+  color: var(--ink);
+}
+.tab[data-active='true'] {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+/* ---- Summary stats (mobile single view) ---- */
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md) var(--space-lg);
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.statValue {
+  display: inline-flex;
+  align-items: baseline;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink-strong);
+}
+.statUnit {
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 1px;
+}
+.statLabel {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* ---- Calendar surface (mobile single) ---- */
+.calendar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.calHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2xs) var(--space-sm);
+}
+
+/* ---- Month navigator (shared) ---- */
+.monthNav {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+.navBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color var(--dur) var(--ease-out-quart),
+    border-color var(--dur) var(--ease-out-quart);
+}
+.navBtn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+.navBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.month {
+  min-width: 8.5rem;
+  text-align: center;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* ---- Legend (shared) ---- */
+.legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+
+/* ---- Desktop: month across the whole rack ---- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+.calGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--space-md);
+}
+.calCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.calCardHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+.calCardName {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+.calCardMeta {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ---- Day grid (shared) ---- */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 5px;
+}
+.weekday {
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding-bottom: 2px;
+}
+.blank {
+  aspect-ratio: 1;
+}
+.cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  cursor: default;
+}
+
+/* Status colors — tiles + swatches share them. */
+.cell[data-level='ok'],
+.swatch[data-level='ok'] {
+  background: color-mix(in oklch, var(--ok) 24%, var(--surface));
+}
+.cell[data-level='ok'] {
+  color: var(--ok-ink);
+}
+.cell[data-level='partial'],
+.swatch[data-level='partial'] {
+  background: color-mix(in oklch, var(--warn) 32%, var(--surface));
+}
+.cell[data-level='partial'] {
+  color: var(--warn-ink);
+}
+.cell[data-level='down'],
+.swatch[data-level='down'] {
+  background: color-mix(in oklch, var(--down) 30%, var(--surface));
+}
+.cell[data-level='down'] {
+  color: var(--down-ink);
+}
+/* No recorded sample for a past day: a flat, slightly-darker-than-empty gray so it
+   reads as "no data", clearly distinct from an outage and from upcoming days. */
+.cell[data-level='none'],
+.swatch[data-level='none'] {
+  background: color-mix(in oklch, var(--border-strong) 30%, var(--surface));
+}
+.cell[data-level='none'] {
+  border-color: transparent;
+  color: var(--muted);
+}
+/* Days that haven't happened yet: the lightest cell — empty, faint outline. */
+.cell[data-level='future'] {
+  background: transparent;
+  border-color: color-mix(in oklch, var(--border) 55%, transparent);
+  color: color-mix(in oklch, var(--muted) 40%, transparent);
+}
+
+@media (max-width: 640px) {
+  .mobileView {
+    gap: var(--space-sm);
+  }
+  .calendar {
+    gap: var(--space-2xs);
+    padding: var(--space-sm);
+  }
+  .grid {
+    gap: 4px;
+  }
+  .cell {
+    border-radius: var(--radius-xs, 6px);
+  }
+  /* Keep the three figures on one row so they never push into the calendar. */
+  .stats {
+    flex-wrap: nowrap;
+    gap: var(--space-sm);
+  }
+  .stat {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .statValue {
+    font-size: var(--text-lg);
+  }
+  .statLabel {
+    line-height: 1.25;
+  }
+  .month {
+    min-width: 7rem;
+  }
+}

@@ -1,0 +1,123 @@
+/* Re-auth reveal dialog + the shared masked-secret field. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-tooltip);
+  display: grid;
+  place-items: center;
+  padding: var(--space-sm);
+}
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(3px);
+  border: none;
+  cursor: pointer;
+}
+
+.dialog {
+  position: relative;
+  width: min(24rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: var(--space-md);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+.dialogHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dialogTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 650;
+  color: var(--ink-strong);
+}
+.dialogTitle svg {
+  color: var(--accent-ink);
+}
+.dialogSub {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.closeBtn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.closeBtn:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.field {
+  padding: 0.55rem 0.7rem;
+  font-size: var(--text-sm);
+  color: var(--ink-strong);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.field:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 24%, transparent);
+}
+
+.error {
+  font-size: var(--text-sm);
+  color: var(--down-ink);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+.cancelBtn {
+  padding: 0.4rem 0.8rem;
+  font-size: var(--text-sm);
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.cancelBtn:hover {
+  background: var(--surface-2);
+}
+.revealBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.85rem;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.revealBtn:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+.revealBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

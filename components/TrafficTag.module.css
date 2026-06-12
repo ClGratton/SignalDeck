@@ -1,0 +1,104 @@
+.tag {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2xs) var(--space-sm);
+  font-size: var(--text-xs);
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
+.lanes {
+  list-style: none;
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2xs) var(--space-md);
+  margin: 0;
+  padding: 0;
+}
+
+.lane {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  box-shadow: 0 0 0 0 transparent;
+  animation: packet-beat 2.4s var(--ease-out-quart) infinite;
+}
+.lane[data-lane='0'] .dot {
+  background: var(--primary);
+  color: var(--primary);
+}
+.lane[data-lane='1'] .dot {
+  background: var(--accent-ink);
+  color: var(--accent-ink);
+  animation-delay: 0.4s;
+}
+.lane[data-lane='2'] .dot {
+  background: var(--tertiary-ink);
+  color: var(--tertiary-ink);
+  animation-delay: 0.8s;
+}
+
+.host {
+  color: var(--ink);
+  font-weight: 500;
+}
+.hostName {
+  color: var(--ink);
+}
+/* The domain suffix is context, not the point — muted, and dropped on phones to
+   keep all three lanes on one line. */
+.hostDomain {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.rate {
+  color: var(--muted);
+}
+
+.src {
+  color: var(--muted);
+}
+/* A sample-data badge looks distinct from a live one, never identical. */
+.src[data-source='sample'] {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+}
+
+@keyframes packet-beat {
+  0% {
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  60%,
+  100% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot {
+    animation: none;
+  }
+}
+
+/* Phones: short names only, tighter, so the legend stays one line. */
+@media (max-width: 640px) {
+  .hostDomain {
+    display: none;
+  }
+  .lanes {
+    gap: var(--space-2xs) var(--space-sm);
+  }
+}

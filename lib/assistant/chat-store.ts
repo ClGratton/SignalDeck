@@ -1,0 +1,97 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// SERVER-ONLY: the operator assistant's chat history, centralized server-side.
+//
+// Previously each browser kept its own copy in localStorage, so the same person
+// saw different chats in the preview vs. their phone vs. another tab. This is the
+// single source of truth instead: one shared collection (the dashboard is a
+// single-user gate), stored in data/assistant-chats.json (gitignored runtime
+// state). Served and written ONLY through the session-gated /api/assistant/chats
+// route — the transcripts hold rich operator data (guest names, datasets, action
+// results) that the public aggregates deliberately omit.
+//
+// The store is intentionally schema-light: it validates the envelope (chat id /
+// title / timestamps) and caps sizes, but treats each chat's `items` array as
+// opaque so the client's rich transcript shape can evolve without a server
+// change. Never store secrets here — the assistant's prompts forbid putting
+// tokens in transcripts, and key values never reach the browser to begin with.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import 'server-only';
+import fs from 'node:fs';
+import path from 'node:path';
+
+export interface StoredChatRecord {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  /** Opaque to the server: the client's discriminated-union transcript items. */
+  items: unknown[];
+}
+
+export interface ChatCollection {
+  activeId: string | null;
+  chats: StoredChatRecord[];
+}
+
+const FILE = path.join(process.cwd(), 'data', 'assistant-chats.json');
+const MAX_CHATS = 50;
+const MAX_ITEMS_PER_CHAT = 400;
+// A guard against a runaway client filling the disk — not a hard product limit.
+const MAX_JSON_CHARS = 4_000_000;
+
+let cached: ChatCollection | null = null;
+
+/** Validate the envelope, cap sizes, keep `items` opaque. Never throws. */
+function coerce(raw: unknown): ChatCollection {
+  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const rawChats = Array.isArray(obj.chats) ? obj.chats : [];
+  const chats: StoredChatRecord[] = [];
+  for (const c of rawChats) {
+    if (!c || typeof c !== 'object') continue;
+    const rec = c as Record<string, unknown>;
+    if (typeof rec.id !== 'string') continue;
+    const now = Date.now();
+    chats.push({
+      id: rec.id,
+      title: typeof rec.title === 'string' ? rec.title.slice(0, 80) : '',
+      createdAt: typeof rec.createdAt === 'number' ? rec.createdAt : now,
+      updatedAt: typeof rec.updatedAt === 'number' ? rec.updatedAt : now,
+      items: Array.isArray(rec.items) ? rec.items.slice(-MAX_ITEMS_PER_CHAT) : [],
+    });
+  }
+  chats.sort((a, b) => b.updatedAt - a.updatedAt);
+  const trimmed = chats.slice(0, MAX_CHATS);
+  const activeId =
+    typeof obj.activeId === 'string' && trimmed.some((c) => c.id === obj.activeId)
+      ? obj.activeId
+      : (trimmed[0]?.id ?? null);
+  return { activeId, chats: trimmed };
+}
+
+export function readChats(): ChatCollection {
+  if (cached) return cached;
+  try {
+    cached = coerce(JSON.parse(fs.readFileSync(FILE, 'utf8')) as unknown);
+  } catch {
+    cached = { activeId: null, chats: [] };
+  }
+  return cached;
+}
+
+export function writeChats(input: unknown): { ok: boolean; detail: string } {
+  const coll = coerce(input);
+  const json = JSON.stringify(coll, null, 2);
+  if (json.length > MAX_JSON_CHARS) {
+    return { ok: false, detail: 'Chat history exceeds the size limit.' };
+  }
+  // Cache regardless, so an in-memory write survives a transient disk failure.
+  cached = coll;
+  try {
+    fs.mkdirSync(path.dirname(FILE), { recursive: true });
+    fs.writeFileSync(FILE, json, 'utf8');
+    return { ok: true, detail: 'Saved.' };
+  } catch {
+    return { ok: false, detail: 'Could not persist chats to disk.' };
+  }
+}

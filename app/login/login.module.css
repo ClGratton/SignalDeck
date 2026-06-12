@@ -1,0 +1,172 @@
+.wrap {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: var(--pad-x);
+}
+
+/* Theme toggle pinned to the screen corner, mirroring the landing header. */
+.themeSlot {
+  position: fixed;
+  top: var(--pad-y);
+  right: var(--pad-x);
+  z-index: var(--z-header);
+}
+
+.card {
+  width: 100%;
+  max-width: 26rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding: var(--space-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+/* Empty slot the persistent BrandNav logo docks into at the card's top-left, on
+   MOBILE only. Reserves the logo's footprint so the heading flows beneath it. On
+   desktop the logo stays in the screen corner, so the slot collapses (no gap). */
+.brandDock {
+  display: none;
+}
+@media (max-width: 960px) {
+  .brandDock {
+    display: block;
+    height: 34px;
+    margin-bottom: var(--space-sm);
+  }
+}
+
+.title {
+  margin-top: var(--space-2xs);
+  font-size: var(--text-xl);
+  letter-spacing: -0.02em;
+}
+.sub {
+  margin-bottom: var(--space-sm);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+/* Two-step: password, then authenticator code. The panels live side by side on a
+   track that slides; the off-screen one is clipped, so the card shows one step at
+   a time and the transition reads as moving forward into the second factor. */
+.steps {
+  overflow: hidden;
+}
+.track {
+  display: flex;
+  flex-wrap: nowrap;
+  transform: translateX(0);
+  transition: transform var(--dur-slow) var(--ease-out-quint);
+}
+.steps[data-step='code'] .track {
+  transform: translateX(-100%);
+}
+.step {
+  flex: 0 0 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  /* Faint fade on the panel that's sliding out. */
+  transition: opacity var(--dur) var(--ease-out-quart);
+}
+.steps[data-step='password'] .step:last-child,
+.steps[data-step='code'] .step:first-child {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .track {
+    transition: none;
+  }
+  .step {
+    transition: none;
+  }
+}
+.label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.input {
+  padding: 0.7rem 0.85rem;
+  font-size: var(--text-base);
+  color: var(--ink-strong);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color var(--dur) var(--ease-out-quart),
+    box-shadow var(--dur) var(--ease-out-quart);
+}
+.input::placeholder {
+  color: var(--muted);
+  letter-spacing: 0.1em;
+}
+.input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 24%, transparent);
+}
+
+.codeLabel {
+  margin-top: var(--space-2xs);
+}
+.code {
+  letter-spacing: 0.5em;
+  text-indent: 0.5em; /* re-center despite the trailing letter-spacing gap */
+  font-size: var(--text-lg);
+}
+.code::placeholder {
+  letter-spacing: 0.5em;
+}
+
+.error {
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  color: var(--down-ink);
+}
+
+.submit {
+  margin-top: var(--space-2xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease-out-quart),
+    transform var(--dur) var(--ease-out-expo);
+}
+.submit:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+.submit:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.submit:disabled {
+  opacity: 0.72;
+  cursor: progress;
+}
+.submit svg {
+  transition: transform var(--dur) var(--ease-out-expo);
+}
+.submit:hover:not(:disabled) svg {
+  transform: translateX(3px);
+}

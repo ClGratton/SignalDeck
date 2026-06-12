@@ -1,0 +1,27 @@
+.wrap {
+  position: fixed;
+  inset: 0;
+  z-index: -1; /* shared background: behind all page content, above the body bg */
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+  /* Optional softening of the background traces. Only the canvas blurs; the hero
+     text is a separate sibling and stays crisp. Default 0px = no cost. */
+  filter: blur(var(--canvas-blur, 0px));
+  /* Calm the very top (where the wordmark sits) and feather the bottom edge. */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 16%,
+    #000 88%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 16%, #000 88%, transparent 100%);
+  animation: boot-fade 1200ms var(--ease-out-quart) both;
+}
+
+.canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}

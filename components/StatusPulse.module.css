@@ -1,0 +1,142 @@
+.pulse {
+  --pulse-color: var(--ok-ink);
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem 0.55rem;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--muted);
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklch, var(--surface) 70%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.pulse[data-level='operational'] {
+  --pulse-color: var(--ok-ink);
+  --pulse-raw: var(--ok);
+}
+.pulse[data-level='partial'] {
+  --pulse-color: var(--warn-ink);
+  --pulse-raw: var(--warn);
+}
+.pulse[data-level='degraded'] {
+  --pulse-color: var(--down-ink);
+  --pulse-raw: var(--down);
+}
+
+.indicator {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 10px;
+  height: 10px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pulse-raw, var(--ok));
+}
+.dot::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  background: var(--pulse-raw, var(--ok));
+  animation: pulse-ring 2.4s var(--ease-out-quart) infinite;
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--pulse-color);
+  font-weight: 500;
+}
+
+.metric {
+  color: var(--ink);
+}
+.metric .tnum {
+  color: var(--ink-strong);
+  font-weight: 500;
+}
+
+/* The "services" count doubles as the trigger for the per-system popover. Reads
+   as text, with a dotted underline hinting it reveals more on hover/focus. */
+.metricBtn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.28rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  text-decoration: underline dotted var(--border-strong);
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--dur) var(--ease-out-quart);
+}
+.metricBtn .tnum {
+  color: var(--ink-strong);
+  font-weight: 500;
+}
+.metricBtn:hover,
+.metricBtn:focus-visible {
+  text-decoration-color: var(--pulse-color);
+}
+
+/* Uptime opens the service-history page. */
+.uptimeLink {
+  color: var(--ink);
+  text-decoration: underline dotted var(--border-strong);
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--dur) var(--ease-out-quart);
+}
+.uptimeLink .tnum {
+  color: var(--ink-strong);
+  font-weight: 500;
+}
+.uptimeLink:hover,
+.uptimeLink:focus-visible {
+  text-decoration-color: var(--pulse-color);
+}
+
+.sep {
+  color: var(--border-strong);
+}
+
+.checked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+}
+.checked[data-stale='true'] {
+  color: var(--warn-ink);
+}
+.checked :global(svg) {
+  animation: spin 1.4s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* On narrow screens, drop the dot separators (they leave trailing marks at
+   wrap points) and let the gap do the separating. */
+@media (max-width: 560px) {
+  .sep {
+    display: none;
+  }
+  .pulse {
+    gap: 0.3rem 0.7rem;
+  }
+}

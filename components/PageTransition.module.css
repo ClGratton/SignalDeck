@@ -1,0 +1,24 @@
+/* Only elements born from a client navigation animate (data-animate set by
+   PageTransition). The initial load plays the hero's own staggered intro
+   instead — and crucially, nothing here can retrigger when html.first-load is
+   removed after the intro. */
+.route[data-animate] {
+  animation: route-in var(--dur-slow) var(--ease-out-quart) both;
+}
+
+@keyframes route-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route[data-animate] {
+    animation: none;
+  }
+}

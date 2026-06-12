@@ -1,0 +1,44 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev.log
+*.log
+
+# local env files — never commit real secrets
+.env
+.env*.local
+
+# runtime state (status history, auth epoch, TOTP replay guard)
+/data/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# editor / os
+.vscode/*
+!.vscode/extensions.json
+.idea
+Thumbs.db
+
+# internal agent/config files
+.claude/
+*.bak
+*.bak-*

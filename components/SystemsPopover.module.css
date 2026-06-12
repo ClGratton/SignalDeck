@@ -1,0 +1,102 @@
+.layer {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  /* `left` is the panel's clamped left edge; just lift it above the trigger. */
+  transform: translateY(calc(-100% - 10px));
+  pointer-events: none;
+}
+
+.panel {
+  min-width: 13rem;
+  max-width: calc(100vw - 20px);
+  padding: var(--space-2xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--surface) 84%, transparent);
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+  box-shadow: var(--shadow-2);
+  opacity: 0;
+  transform: translateY(5px);
+  transition:
+    opacity var(--dur) var(--ease-out-quart),
+    transform var(--dur) var(--ease-out-quart);
+}
+.layer[data-open='true'] .panel {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--ok);
+}
+.row[data-health='degraded'] .dot {
+  background: var(--warn);
+}
+.row[data-health='down'] .dot {
+  background: var(--down);
+}
+
+.name {
+  flex: 1;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.row[data-health='degraded'] .name {
+  color: var(--warn-ink);
+}
+.row[data-health='down'] .name {
+  color: var(--down-ink);
+}
+
+/* The "infinitely smooth rectangle": a pill, tinted by the system's own health. */
+.uptime {
+  font-size: var(--text-xs);
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklch, var(--ok) 16%, var(--surface));
+  color: var(--ok-ink);
+  white-space: nowrap;
+}
+.row[data-health='degraded'] .uptime {
+  background: color-mix(in oklch, var(--warn) 22%, var(--surface));
+  color: var(--warn-ink);
+}
+.row[data-health='down'] .uptime {
+  background: color-mix(in oklch, var(--down) 20%, var(--surface));
+  color: var(--down-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    transition: opacity var(--dur-fast) linear;
+    transform: none;
+  }
+  .layer[data-open='true'] .panel {
+    transform: none;
+  }
+}

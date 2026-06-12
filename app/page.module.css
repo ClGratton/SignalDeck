@@ -1,0 +1,314 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+}
+
+/* ---- Header ---- */
+.header {
+  position: relative;
+  z-index: var(--z-header);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end; /* left brand is the persistent layout BrandNav */
+  gap: var(--space-sm);
+  padding: var(--pad-y) var(--pad-x);
+}
+.headerRight {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+/* ---- Hero ---- */
+.hero {
+  position: relative;
+  isolation: isolate;
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: var(--space-lg) var(--pad-x) var(--space-xl);
+  overflow: hidden;
+}
+
+.heroInner {
+  position: relative;
+  z-index: var(--z-content);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-md);
+  max-width: 52rem;
+  width: 100%;
+}
+/* Soft scrim keeps the wordmark crisp where it crosses the densest traces.
+   The ellipse shape lives in a static mask; the color is a plain background-color
+   so it crossfades in lockstep with the page on theme change. (A gradient
+   background can't be transitioned, so it would snap and flash a visible blob.) */
+.heroInner::before {
+  content: '';
+  position: absolute;
+  inset: -14% -18%;
+  z-index: -1;
+  background-color: var(--scrim);
+  -webkit-mask-image: radial-gradient(58% 56% at 50% 46%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(58% 56% at 50% 46%, #000 0%, transparent 72%);
+  pointer-events: none;
+}
+
+.heroGlyph {
+  width: clamp(36px, 5vw, 48px);
+  height: auto;
+  color: var(--primary-ink);
+  margin-bottom: calc(-1 * var(--space-3xs));
+}
+
+.title {
+  font-size: var(--display);
+  font-weight: 660;
+  letter-spacing: -0.035em;
+  line-height: 0.96;
+  color: var(--ink-strong);
+}
+
+.tagline {
+  font-size: var(--text-lg);
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 38ch;
+  text-wrap: pretty;
+}
+
+.pulseRow {
+  margin-top: var(--space-2xs);
+}
+.doorRow {
+  margin-top: var(--space-sm);
+}
+.trafficRow {
+  margin-top: var(--space-3xs);
+}
+/* Collapse entirely when the Cloudflare integration is off (TrafficTag renders null). */
+.trafficRow:empty {
+  display: none;
+  margin: 0;
+}
+
+/* ---- Hero spec tiles ----
+   The rig's headline numbers, each in its own rounded panel. Subtle glass so they
+   read as instruments resting over the telemetry rather than opaque cards. */
+.specs {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2xs);
+  margin: var(--space-2xs) 0 0;
+  padding: 0;
+  width: 100%;
+}
+.spec {
+  flex: 1 1 6.5rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: var(--space-sm) var(--space-xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklch, var(--surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.specValue {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  color: var(--ink-strong);
+  white-space: nowrap;
+}
+.specUnit {
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 1px;
+}
+.specOf {
+  font-weight: 400;
+  color: var(--muted);
+}
+.specLabel {
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+/* Load tile: a thin gauge along the bottom edge, colored by threshold. */
+.loadSpec {
+  position: relative;
+  overflow: hidden;
+}
+.loadBar {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3px;
+  background: color-mix(in oklch, var(--border) 70%, transparent);
+}
+.loadBar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: var(--load, 0%);
+  background: var(--ok);
+  transition: width var(--dur) var(--ease-out-quart);
+}
+.loadBar[data-level='partial']::after {
+  background: var(--warn);
+}
+.loadBar[data-level='degraded']::after {
+  background: var(--down);
+}
+
+/* ---- Footer ---- */
+.footer {
+  position: relative;
+  z-index: var(--z-content);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--pad-x) var(--pad-y);
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 88%, var(--surface));
+}
+
+.footRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+}
+.stack {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+.footLabel {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.stackList {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem var(--space-sm);
+  margin: 0;
+  padding: 0;
+}
+.stackItem {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.stackName {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink);
+}
+.stackRole {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.links {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+.link {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  transition: color var(--dur) var(--ease-out-quart);
+}
+.link:hover {
+  color: var(--accent-ink);
+}
+.version {
+  font-size: var(--text-xs);
+  color: var(--border-strong);
+}
+
+@media (max-width: 640px) {
+  .title {
+    letter-spacing: -0.03em;
+  }
+
+  /* Centered hero with comfortable, even rhythm. (No align-content tricks — those
+     dumped all the slack below the content and left a dead gap before the footer.) */
+  .hero {
+    padding: var(--space-md) var(--pad-x);
+  }
+  .heroInner {
+    gap: var(--space-md);
+  }
+  .heroGlyph {
+    width: 34px;
+    margin-bottom: 0;
+  }
+  .tagline {
+    font-size: var(--text-base);
+  }
+  .pulseRow,
+  .doorRow,
+  .trafficRow {
+    margin-top: 0;
+  }
+  /* A little more air sets the stat tiles apart as their own group. */
+  .specs {
+    margin-top: var(--space-2xs);
+  }
+
+  /* Spec tiles: 3 across, bottom two grow to fill. Kept small so the upper hero
+     gets its air back. */
+  .spec {
+    flex-basis: 5.5rem;
+    padding: var(--space-2xs);
+    border-radius: var(--radius-md);
+  }
+  .specValue {
+    font-size: var(--text-base);
+  }
+
+  /* On a phone the "powered by" stack ate half the footer and isn't essential
+     (those systems are in the status popover). Drop it; the footer becomes a
+     single quiet line of links. */
+  .stack {
+    display: none;
+  }
+  .footer {
+    gap: 0;
+    padding: var(--space-xs) var(--pad-x) max(var(--space-sm), env(safe-area-inset-bottom));
+  }
+  .footRow {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-2xs) var(--space-sm);
+  }
+  .link,
+  .version {
+    font-size: var(--text-xs);
+  }
+}
