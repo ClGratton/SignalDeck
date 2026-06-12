@@ -1,10 +1,10 @@
-# Grtlabs
+# Homelab Dashboard
 
 A Next.js dashboard for monitoring and managing a personal homelab. It provides a clean, read-only public landing page for high-level status, and a secure, authenticated operator console for direct backend control.
 
 ## Overview
 
-Grtlabs serves two distinct surfaces from a single application:
+This dashboard serves two distinct surfaces from a single application:
 - **Public Front Door:** A landing page and status history view displaying sanitized, aggregated health metrics.
 - **Operator Console:** An authenticated dashboard that aggregates data from Proxmox, TrueNAS SCALE, Home Assistant, and Jellyfin. It includes an integrated AI assistant for operational tasks.
 

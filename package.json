@@ -1,5 +1,5 @@
 {
-  "name": "grtlabs",
+  "name": "homelab-dashboard",
   "version": "0.1.0",
   "description": "A personal homelab dashboard featuring a public status landing page and an authenticated operator console.",
   "private": true,
