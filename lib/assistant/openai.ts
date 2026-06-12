@@ -11,7 +11,7 @@ import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
 import type { AssistantProvider, ChatTurn } from '@/lib/assistant/types';
 
-const MAX_ITERATIONS = 12;
+const MAX_ITERATIONS = 60;
 
 interface ToolCall {
   id: string;

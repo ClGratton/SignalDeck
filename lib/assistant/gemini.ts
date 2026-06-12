@@ -10,7 +10,7 @@ import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
 import type { ChatTurn } from '@/lib/assistant/types';
 
-const MAX_ITERATIONS = 12;
+const MAX_ITERATIONS = 60;
 
 interface GeminiPart {
   text?: string;
