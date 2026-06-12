@@ -19,7 +19,7 @@ import path from 'node:path';
 export interface ServiceField {
   name: string; // the env-var name
   label: string;
-  group: 'Proxmox' | 'TrueNAS' | 'Jellyfin' | 'Home Assistant' | 'Cloudflare' | 'Shell (SSH)';
+  group: 'Proxmox' | 'TrueNAS' | 'Jellyfin' | 'Home Assistant' | 'Cloudflare' | 'Shell (SSH)' | 'Assistant';
   secret: boolean; // masked in the UI; revealed only after re-auth
   placeholder?: string;
   /** True for the credentials the assistant needs ELEVATED to ACT (see CREDENTIALS.md). */
@@ -50,6 +50,9 @@ export const SERVICE_FIELDS: ServiceField[] = [
   { name: 'SSH_USER', label: 'User', group: 'Shell (SSH)', secret: false, placeholder: 'root', privilegedForActions: true },
   { name: 'SSH_PASSWORD', label: 'Password (or use a key)', group: 'Shell (SSH)', secret: true },
   { name: 'SSH_PRIVATE_KEY', label: 'Private key (PEM, overrides password)', group: 'Shell (SSH)', secret: true },
+  // How many tool steps the agent may take in ONE turn before it pauses and asks
+  // you to continue. Higher = longer autonomous runs before a checkpoint.
+  { name: 'ASSISTANT_MAX_STEPS', label: 'Agent steps per turn (default 60)', group: 'Assistant', secret: false, placeholder: '60' },
 ];
 
 const FIELD_NAMES = new Set(SERVICE_FIELDS.map((f) => f.name));

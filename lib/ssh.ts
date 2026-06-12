@@ -37,7 +37,8 @@ export function sshRun(command: string): Promise<{ ok: boolean; detail: string }
   return new Promise((resolve) => {
     const conn = new Client();
     let settled = false;
-    let out = '';
+    let stdout = '';
+    let stderr = '';
     const done = (r: { ok: boolean; detail: string }) => {
       if (settled) return;
       settled = true;
@@ -56,14 +57,24 @@ export function sshRun(command: string): Promise<{ ok: boolean; detail: string }
         if (err) return done({ ok: false, detail: `SSH exec failed: ${err.message}` });
         stream
           .on('close', (code: number) => {
-            const clipped = out.length > MAX_OUTPUT ? out.slice(0, MAX_OUTPUT) + '… (truncated)' : out;
-            done({ ok: code === 0, detail: `exit ${code}\n${clipped.trim() || '(no output)'}` });
+            // The command RAN: that is a success of the action even when the
+            // command itself exits non-zero (grep found nothing, a probe
+            // failed, etc.). exit≠0 is information for the model, not a failure
+            // of run_shell — only a real infra error (no connect / timeout)
+            // resolves ok:false above. stdout and stderr are kept separate so
+            // the action card can show them in their own sections.
+            const parts: string[] = [];
+            if (stdout.trim()) parts.push(stdout.trim());
+            if (stderr.trim()) parts.push('--- stderr ---\n' + stderr.trim());
+            let body = parts.join('\n') || '(no output)';
+            if (body.length > MAX_OUTPUT) body = body.slice(0, MAX_OUTPUT) + '… (truncated)';
+            done({ ok: true, detail: `exit ${code}\n${body}` });
           })
           .on('data', (d: Buffer) => {
-            out += d.toString('utf8');
+            stdout += d.toString('utf8');
           })
           .stderr.on('data', (d: Buffer) => {
-            out += d.toString('utf8');
+            stderr += d.toString('utf8');
           });
       });
     });

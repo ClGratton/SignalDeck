@@ -606,9 +606,6 @@ export async function proxmoxRequest(
   if (!path.startsWith('/api2/json/')) {
     path = '/api2/json' + (path.startsWith('/api2/') ? path.slice(5) : path);
   }
-  if (path.includes('..') || /\s/.test(path)) {
-    return { ok: false, detail: 'Invalid API path.' };
-  }
   const res = await labFetch(`${auth.base}${path}`, {
     method,
     headers: auth.headers,
@@ -646,12 +643,12 @@ export async function haRequest(
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     return { ok: false, detail: `Unsupported method ${method}.` };
   }
+  // Normalize onto HA's /api surface (the only thing this host serves over the
+  // token) rather than rejecting — a hard "invalid path" guard only produced
+  // confusing failures without preventing anything HA wouldn't 404 itself.
   let path = rawPath.trim();
   if (!path.startsWith('/')) path = '/' + path;
-  if (!path.startsWith('/api/') && path !== '/api') {
-    return { ok: false, detail: 'Path must be under the Home Assistant /api/ surface.' };
-  }
-  if (path.includes('..') || /\s/.test(path)) return { ok: false, detail: 'Invalid API path.' };
+  if (!path.startsWith('/api')) path = '/api' + path;
   const res = await labFetch(`${auth.base}${path}`, {
     method,
     headers: auth.headers,
@@ -781,7 +778,6 @@ export async function labRequest(
       if (!host) return { ok: false, detail: 'Jellyfin is not configured.' };
       let p = path.trim();
       if (!p.startsWith('/')) p = '/' + p;
-      if (p.includes('..') || /\s/.test(p)) return { ok: false, detail: 'Invalid Jellyfin path.' };
       const res = await labFetch(`${trimSlash(host)}${p}`, {
         method,
         headers: key ? { Authorization: `MediaBrowser Token="${key}"` } : {},
@@ -798,7 +794,6 @@ export async function labRequest(
       let p = path.trim();
       if (!p.startsWith('/')) p = '/' + p;
       if (!p.startsWith('/client/v4')) p = '/client/v4' + p;
-      if (p.includes('..') || /\s/.test(p)) return { ok: false, detail: 'Invalid Cloudflare path.' };
       const res = await labFetch(`https://api.cloudflare.com${p}`, {
         method,
         headers: { Authorization: `Bearer ${token}` },

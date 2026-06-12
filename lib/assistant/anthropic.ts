@@ -9,9 +9,8 @@ import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
 import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
+import { maxAgentSteps } from '@/lib/assistant/config';
 import type { ChatTurn } from '@/lib/assistant/types';
-
-const MAX_ITERATIONS = 60;
 
 // Adaptive thinking only exists on the newest models; sending it to older ones
 // is a 400. Anything else just runs without a thinking block.
@@ -36,7 +35,8 @@ export async function runAnthropicTurn(
     content: t.content,
   }));
 
-  for (let i = 0; i < MAX_ITERATIONS; i++) {
+  const maxIterations = maxAgentSteps();
+  for (let i = 0; i < maxIterations; i++) {
     const stream = client.messages.stream({
       model,
       max_tokens: 16000,

@@ -18,7 +18,7 @@
 
 .panel {
   position: relative;
-  width: min(34rem, 100%);
+  width: min(48rem, 100%);
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -70,7 +70,7 @@
 }
 
 .intro {
-  padding: var(--space-sm) var(--space-md) 0;
+  margin: 0 0 0.4rem;
   font-size: var(--text-sm);
   color: var(--muted);
 }
@@ -79,13 +79,65 @@
   color: var(--warn-ink);
 }
 
-.scroll {
+/* Two-column body: a left nav of sections + the selected section's fields. */
+.body {
   flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.nav {
+  flex: 0 0 11rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: var(--space-sm);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+.navItem {
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.navItem:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.navItem[data-active] {
+  background: var(--surface-2);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.content {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: var(--space-sm) var(--space-md) var(--space-lg);
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: 0.65rem;
+}
+
+@media (max-width: 32rem) {
+  .body {
+    flex-direction: column;
+  }
+  .nav {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 0.3rem;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .navItem {
+    white-space: nowrap;
+  }
 }
 .muted {
   color: var(--muted);

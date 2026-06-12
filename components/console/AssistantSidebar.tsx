@@ -55,7 +55,7 @@ type Item =
   // Ask-mode proposal (confirmed out of band via /execute).
   | { kind: 'proposal'; card: ProposalCard; state: ProposalState; result?: string }
   // Agent-mode inline action (auto-run, or Run/Skip via /decide).
-  | { kind: 'action'; id: string; title: string; status: ActionStatus; critical?: boolean; detail?: string }
+  | { kind: 'action'; id: string; title: string; status: ActionStatus; critical?: boolean; detail?: string; request?: string }
   | { kind: 'error'; text: string };
 
 interface StoredChat {
@@ -127,6 +127,7 @@ function sanitizeItems(raw: unknown): Item[] {
         title: it.title,
         status: stale ? 'skipped' : it.status,
         detail: stale ? 'Interrupted.' : it.detail,
+        request: it.request,
       });
     }
   }
@@ -143,6 +144,71 @@ function mergeChats(a: StoredChat[], b: StoredChat[]): StoredChat[] {
     if (!prev || c.updatedAt > prev.updatedAt) byId.set(c.id, c);
   }
   return [...byId.values()].sort((x, y) => y.updatedAt - x.updatedAt).slice(0, MAX_CHATS);
+}
+
+const clipText = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…' : s);
+
+/** A run of consecutive tool-lookup chips, folded into one collapsible row so a
+ *  step that reads the registry seven times doesn't spray seven chips. */
+type ToolGroup = { kind: 'toolgroup'; labels: string[] };
+type Row = Item | ToolGroup;
+
+function groupRows(items: Item[]): Row[] {
+  const rows: Row[] = [];
+  let run: string[] | null = null;
+  for (const it of items) {
+    if (it.kind === 'tool') {
+      (run ??= []).push(it.label);
+    } else if (it.kind === 'reasoning' && !it.text.trim()) {
+      // A blank reasoning item renders as nothing — don't let it break (or
+      // appear between) a run of lookups, which is exactly what made seven
+      // back-to-back "listed HA entities" chips show separately.
+      continue;
+    } else {
+      if (run) {
+        rows.push({ kind: 'toolgroup', labels: run });
+        run = null;
+      }
+      rows.push(it);
+    }
+  }
+  if (run) rows.push({ kind: 'toolgroup', labels: run });
+  return rows;
+}
+
+/** Build the API transcript from the rich item list. Crucially this PACKS the
+ *  outcomes of tool calls and actions back into the context as assistant notes:
+ *  the chat APIs are stateless, so when you resume after the step cap (or send
+ *  any new message) the model only knows what's in this payload. Sending
+ *  user/assistant TEXT only made it forget the dozen steps it just ran and
+ *  restart from scratch — so we replay each action's request + result and each
+ *  lookup here. Consecutive same-role turns are merged (providers need
+ *  alternating roles). */
+function buildHistory(items: Item[]): ChatTurn[] {
+  const raw: ChatTurn[] = [];
+  for (const it of items) {
+    if (it.kind === 'user') raw.push({ role: 'user', content: it.text });
+    else if (it.kind === 'assistant' && it.text) raw.push({ role: 'assistant', content: it.text });
+    else if (
+      it.kind === 'action' &&
+      (it.status === 'ok' || it.status === 'fail' || it.status === 'skipped')
+    ) {
+      const verb = it.status === 'skipped' ? 'skipped by operator' : it.status === 'ok' ? 'ran' : 'failed';
+      const parts = [`[action ${verb}: ${it.title}`];
+      if (it.request) parts.push(`sent ${clipText(it.request, 300)}`);
+      if (it.detail) parts.push(`→ ${clipText(it.detail, 1500)}`);
+      raw.push({ role: 'assistant', content: parts.join(' ') + ']' });
+    } else if (it.kind === 'tool') {
+      raw.push({ role: 'assistant', content: `[used: ${it.label}]` });
+    }
+  }
+  const merged: ChatTurn[] = [];
+  for (const t of raw) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === t.role) last.content += '\n' + t.content;
+    else merged.push({ ...t });
+  }
+  return merged;
 }
 
 export function AssistantSidebar({
@@ -573,10 +639,83 @@ export function AssistantSidebar({
     abortRef.current?.abort();
   }, []);
 
+  // /compact — replace the running transcript with a concise model-written brief
+  // so the re-sent context (and its token cost) shrinks, while the model keeps
+  // the task, discovered facts, and what ran. Reuses the normal endpoint in Ask
+  // mode (no actions) so there's no separate per-provider summarizer.
+  const compact = useCallback(async () => {
+    if (busy || !effective || items.length === 0) return;
+    setInput('');
+    setBusy(true);
+    setItems((prev) => [...prev, { kind: 'tool', label: 'compacting context…' }]);
+    const instruction =
+      'Compact our conversation into a tight running brief I can continue from. Cover: the goal/task, the key facts you discovered (vmids, nodes, entity ids, IPs, results), which actions ran and their outcomes, and what is still left to do. Short factual bullets. Output ONLY the brief — do not call any tools.';
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let summary = '';
+    try {
+      const res = await fetch('/api/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...buildHistory(items), { role: 'user', content: instruction }],
+          mode: 'ask',
+          approval,
+          provider: effective.provider,
+          model: effective.model || undefined,
+        }),
+        signal: controller.signal,
+      });
+      if (res.status === 401) {
+        setSessionExpired(true);
+        setItems((prev) => prev.filter((it) => it.kind !== 'tool' || it.label !== 'compacting context…'));
+        return;
+      }
+      if (res.ok && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const e = JSON.parse(line) as AssistantEvent;
+              if (e.type === 'text') summary += e.text;
+            } catch {
+              /* partial line */
+            }
+          }
+        }
+      }
+    } catch {
+      /* fall through — if nothing came back we leave the chat untouched */
+    } finally {
+      abortRef.current = null;
+      setBusy(false);
+    }
+    if (summary.trim()) {
+      // Reset the transcript to just the brief; that's the smaller context going
+      // forward. Keep it visibly marked so you know compaction happened.
+      setItems([{ kind: 'assistant', text: `**Context compacted.**\n\n${summary.trim()}` }]);
+      scrollToBottom();
+    } else {
+      setItems((prev) => prev.filter((it) => it.kind !== 'tool' || it.label !== 'compacting context…'));
+    }
+  }, [busy, effective, items, approval, scrollToBottom]);
+
   const send = useCallback(
     async (raw: string) => {
       const text = raw.trim();
       if (!text || busy || !effective) return;
+      if (text === '/compact') {
+        void compact();
+        return;
+      }
       setInput('');
       setBusy(true);
       setMenuOpen(false);
@@ -584,13 +723,10 @@ export function AssistantSidebar({
       const notes = contextNotes.current.splice(0);
       const sent = notes.length > 0 ? `[context: ${notes.join('; ')}]\n${text}` : text;
 
-      // Transcript for the API: user/assistant text only. Built from the current
-      // items OUTSIDE the state updater (updaters can run twice in StrictMode).
-      const history: ChatTurn[] = items.flatMap((it): ChatTurn[] => {
-        if (it.kind === 'user') return [{ role: 'user', content: it.text }];
-        if (it.kind === 'assistant' && it.text) return [{ role: 'assistant', content: it.text }];
-        return [];
-      });
+      // Transcript for the API, with tool/action outcomes packed back in so the
+      // model keeps its execution memory across turns (see buildHistory). Built
+      // OUTSIDE the state updater (updaters can run twice in StrictMode).
+      const history: ChatTurn[] = buildHistory(items);
       setItems((prev) => [...prev, { kind: 'user', text }]);
 
       const controller = new AbortController();
@@ -661,17 +797,19 @@ export function AssistantSidebar({
                 title: e.card.title,
                 status: 'pending',
                 critical: e.critical,
-                detail: e.card.detail,
+                request: e.card.detail, // what will run, shown when expanded
               });
             } else if (e.type === 'action') {
               const idx = next.findIndex((it) => it.kind === 'action' && it.id === e.id);
+              const prior = idx >= 0 ? (next[idx] as Extract<Item, { kind: 'action' }>) : undefined;
               const row: Item = {
                 kind: 'action',
                 id: e.id,
                 title: e.title,
                 status: e.status,
                 detail: e.detail,
-                critical: idx >= 0 ? (next[idx] as { critical?: boolean }).critical : undefined,
+                request: e.request ?? prior?.request,
+                critical: prior?.critical,
               };
               if (idx >= 0) next[idx] = row;
               else next.push(row);
@@ -708,7 +846,7 @@ export function AssistantSidebar({
         requestAnimationFrame(() => inputRef.current?.focus());
       }
     },
-    [busy, effective, mode, approval, items],
+    [busy, effective, mode, approval, items, compact],
   );
 
   // Resolve an inline (agent-mode) action awaiting Run/Skip.
@@ -963,7 +1101,7 @@ export function AssistantSidebar({
               </div>
             </div>
           ) : (
-            items.map((it, i) => {
+            groupRows(items).map((it, i) => {
               switch (it.kind) {
                 case 'user':
                   return (
@@ -979,12 +1117,8 @@ export function AssistantSidebar({
                   );
                 case 'reasoning':
                   return <ReasoningBlock key={i} text={it.text} />;
-                case 'tool':
-                  return (
-                    <div key={i} className={`${styles.toolChip} mono`}>
-                      {it.label}
-                    </div>
-                  );
+                case 'toolgroup':
+                  return <ToolGroupChip key={i} labels={it.labels} />;
                 case 'error':
                   return (
                     <div key={i} className={styles.errorRow} role="alert">
@@ -1339,10 +1473,13 @@ function ActionCard({
   onDecide: (id: string, d: 'run' | 'skip') => void;
 }) {
   const [open, setOpen] = useState(false);
-  const { id, title, status, critical, detail } = item;
-  const settled = status === 'ok' || status === 'fail' || status === 'skipped';
+  const { id, title, status, critical, detail, request } = item;
   const statusWord =
     status === 'running' ? 'Running…' : status === 'ok' ? 'Done' : status === 'fail' ? 'Failed' : 'Skipped';
+  // Expandable whenever we have something to show — what was SENT and/or the
+  // result. The body splits the two so you can always see the command/request,
+  // not just the output.
+  const expandable = Boolean(request || detail);
   return (
     <div className={styles.action} data-status={status}>
       <div className={styles.actionHead}>
@@ -1351,7 +1488,7 @@ function ActionCard({
         {critical && status === 'pending' ? (
           <span className={`${styles.actionRisk} mono`}>critical</span>
         ) : null}
-        {settled && detail ? (
+        {expandable ? (
           <button
             type="button"
             className={styles.actionExpand}
@@ -1363,6 +1500,29 @@ function ActionCard({
           </button>
         ) : null}
       </div>
+      {status !== 'pending' ? (
+        <p className={styles.actionResult} data-status={status}>
+          {statusWord}
+        </p>
+      ) : null}
+      {open ? (
+        <div className={styles.actionSections}>
+          {request ? (
+            <div className={styles.actionSection}>
+              <span className={`${styles.actionSectionLabel} mono`}>sent</span>
+              <pre className={styles.actionDetail}>{request}</pre>
+            </div>
+          ) : null}
+          {detail ? (
+            <div className={styles.actionSection}>
+              <span className={`${styles.actionSectionLabel} mono`}>
+                {status === 'fail' ? 'error' : 'output'}
+              </span>
+              <pre className={styles.actionDetail}>{detail}</pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {status === 'pending' ? (
         <div className={styles.proposalActions}>
           <button type="button" className={styles.confirmBtn} onClick={() => onDecide(id, 'run')}>
@@ -1372,14 +1532,38 @@ function ActionCard({
             Skip
           </button>
         </div>
-      ) : (
-        <>
-          <p className={styles.actionResult} data-status={status}>
-            {statusWord}
-          </p>
-          {open && detail ? <pre className={styles.actionDetail}>{detail}</pre> : null}
-        </>
-      )}
+      ) : null}
+    </div>
+  );
+}
+
+/** A folded run of tool-lookup chips. One chip stays inline; a run collapses to
+ *  "N steps" that expands to the individual lookups. */
+function ToolGroupChip({ labels }: { labels: string[] }) {
+  const [open, setOpen] = useState(false);
+  if (labels.length === 1) {
+    return <div className={`${styles.toolChip} mono`}>{labels[0]}</div>;
+  }
+  return (
+    <div className={styles.toolGroup} data-open={open || undefined}>
+      <button
+        type="button"
+        className={styles.toolGroupToggle}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <ChevronDown size={12} strokeWidth={2.2} aria-hidden data-flip={open || undefined} />
+        <span className="mono">{labels.length} steps</span>
+      </button>
+      {open ? (
+        <div className={styles.toolGroupList}>
+          {labels.map((l, i) => (
+            <span key={i} className={`${styles.toolChip} mono`}>
+              {l}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

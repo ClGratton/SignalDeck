@@ -308,14 +308,16 @@ async function dispatchAction(spec: ActionSpec, ctx: ToolContext): Promise<ToolO
     ctx.emit({ type: 'confirm', card, critical: spec.critical });
     const decision = await ctx.awaitDecision(id, ctx.signal);
     if (decision === 'skip') {
-      ctx.emit({ type: 'action', id, title: spec.title, status: 'skipped' });
+      ctx.emit({ type: 'action', id, title: spec.title, status: 'skipped', request: spec.detail });
       return {
         content: `The operator SKIPPED "${spec.title}" — it did NOT run. Do not retry it; carry on with the rest of the task and note it was skipped.`,
       };
     }
   }
 
-  ctx.emit({ type: 'action', id, title: spec.title, status: 'running' });
+  // `spec.detail` is what we're about to SEND (command / method+path+body); the
+  // run() result is the OUTPUT. The card shows them as separate sections.
+  ctx.emit({ type: 'action', id, title: spec.title, status: 'running', request: spec.detail });
   const res = await spec.run();
   ctx.emit({
     type: 'action',
@@ -323,6 +325,7 @@ async function dispatchAction(spec: ActionSpec, ctx: ToolContext): Promise<ToolO
     title: spec.title,
     status: res.ok ? 'ok' : 'fail',
     detail: res.detail,
+    request: spec.detail,
   });
   return {
     content: res.ok ? `DONE — ${spec.title}: ${res.detail}` : `FAILED — ${spec.title}: ${res.detail}`,

@@ -215,8 +215,13 @@ export async function getTrafficSeries(): Promise<TrafficSeries | null> {
     // Coalesce concurrent refreshes into one upstream call.
     inflight = fetchSeries(token, zone)
       .then((value) => {
-        cache = { at: Date.now(), value };
-        return value;
+        // Hold the last good series. The credentials ARE set, so a single failed
+        // poll must never wipe live data back to "off" — keep the previous value
+        // (and reset the TTL so we retry next window) instead of caching null.
+        // Only a cold start that has never succeeded shows nothing.
+        if (value != null) cache = { at: Date.now(), value };
+        else if (cache) cache = { at: Date.now(), value: cache.value };
+        return cache?.value ?? null;
       })
       .finally(() => {
         inflight = null;

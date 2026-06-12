@@ -156,6 +156,37 @@
   border-radius: var(--radius-pill);
 }
 
+.toolGroup {
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.toolGroupToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: 0.12rem 0.5rem;
+  background: none;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.toolGroupToggle:hover {
+  color: var(--ink);
+}
+.toolGroupToggle [data-flip] {
+  transform: rotate(180deg);
+}
+.toolGroupList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding-left: 0.4rem;
+}
+
 .errorRow {
   font-size: var(--text-sm);
   color: var(--down-ink);
@@ -848,6 +879,23 @@
 }
 .actionResult[data-status='fail'] {
   color: var(--down-ink);
+}
+.actionSections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+}
+.actionSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.actionSectionLabel {
+  font-size: var(--text-2xs, 0.65rem);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 .actionDetail {
   margin: 0.1rem 0 0;

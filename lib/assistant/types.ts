@@ -42,7 +42,7 @@ export type AssistantEvent =
   /** Agent mode: an action awaiting an inline Run/Skip decision (/decide). */
   | { type: 'confirm'; card: ProposalCard; critical: boolean }
   /** Agent mode: progress of an inline action (auto-run or post-confirm). */
-  | { type: 'action'; id: string; title: string; status: ActionStatus; detail?: string }
+  | { type: 'action'; id: string; title: string; status: ActionStatus; detail?: string; request?: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
