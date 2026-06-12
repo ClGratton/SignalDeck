@@ -1,7 +1,7 @@
 {
   "name": "grtlabs",
   "version": "0.1.0",
-  "description": "Self-hosted dashboard and operator console for monitoring and managing infrastructure.",
+  "description": "A personal homelab dashboard featuring a public status landing page and an authenticated operator console.",
   "private": true,
   "scripts": {
     "dev": "next dev",

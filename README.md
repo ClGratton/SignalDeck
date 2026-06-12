@@ -1,88 +1,56 @@
-# Self-hosted dashboard and operator console
+# Grtlabs
 
-This repository contains a self-hosted web tool for monitoring infrastructure, viewing service history, and interacting with backend systems through a controlled operator console.
+A Next.js dashboard for monitoring and managing a personal homelab. It provides a clean, read-only public landing page for high-level status, and a secure, authenticated operator console for direct backend control.
 
-It is built as a single Next.js application that serves two distinct surfaces:
+## Overview
 
-- A public landing page that shows a concise status snapshot and routes signed-in users to the console.
-- A protected operator console for deeper inspection, assistant-driven workflows, and privileged actions.
+Grtlabs serves two distinct surfaces from a single application:
+- **Public Front Door:** A landing page and status history view displaying sanitized, aggregated health metrics.
+- **Operator Console:** An authenticated dashboard that aggregates data from Proxmox, TrueNAS SCALE, Home Assistant, and Jellyfin. It includes an integrated AI assistant for operational tasks.
 
 ## Architecture
 
-The project is organized around server-side data access. Secrets and backend credentials stay on the server, while the browser only receives the data needed to render the current view.
+The core design constraint is strict client/server separation. The browser receives only the minimal data required to render the UI.
+
+- **Server-Side Secrets:** API keys and credentials live exclusively in `.env.local` and are accessed only by server components and route handlers.
+- **Sanitized Public Routes:** Unauthenticated routes expose only aggregated status counts. Internal IPs, node names, and topologies are never leaked.
+- **Secure Sessions:** The operator console is guarded by Next.js middleware using HMAC-SHA256 signed tokens with epoch-based revocation.
+- **State Management:** Mutable application state (auth sessions, chat history, metrics logs) lives in plain JSON files within the git-ignored `data/` directory. The server is the absolute source of truth.
 
 ```mermaid
 flowchart LR
   Browser[Browser] --> App[Next.js App Router]
-  App --> Public[Public landing and status pages]
-  App --> Auth[Session checks and middleware]
+  App --> Public[Public landing and status]
+  App --> Auth[Middleware session checks]
   App --> Console[Protected operator console]
-  Console --> Assistant[Assistant stream and action flow]
+  Console --> Assistant[Assistant action pipeline]
   App --> API[Route handlers]
-  API --> Backends[Infrastructure backends and external APIs]
+  API --> Backends[Proxmox, TrueNAS, HA, etc.]
   API --> State[Runtime state in data/]
 ```
 
-Key implementation choices:
+## Operator Assistant
 
-- Next.js App Router with server components and route handlers for all backend access.
-- Middleware protection for privileged console routes.
-- CSS Modules for component-scoped styling.
-- A small, explicit server/client split: client components handle interaction, server modules handle credentials and state.
-
-## Main surfaces
-
-- Public landing page: a branded front door with current status cues, service metrics, and entry points.
-- Status/history page: recorded service health over time, backed by persisted history data.
-- Operator console: authenticated view for system state, assistant interactions, settings, and privileged actions.
-- Assistant sidebar: chat, model selection, memory notes, and controlled action execution.
-
-## Assistant and control flow
-
-The assistant is designed to be useful without becoming unconstrained.
-
-- Read-only questions stream responses from the model and can pull live snapshots from server-side helpers.
-- Action requests are either proposed for later confirmation or executed inline depending on mode and approval level.
-- Sensitive writes require explicit confirmation or re-authentication, depending on the operation.
-- Provider keys are write-only through the UI and are never echoed back to the browser except through dedicated reveal flows.
-
-## Data and state
-
-Persistent runtime data lives outside the source tree and is treated as application state, not code:
-
-- `.env.local` holds secrets and service credentials.
-- `data/` holds runtime JSON state such as auth, assistant memory, chats, and history.
-- The browser may cache some UI state locally, but the server copy is the source of truth for shared operator data.
-
-## Security model
-
-The application is built around a few hard rules:
-
-- Secrets never leave server-only modules.
-- Public routes expose only sanitized aggregates.
-- Sessions are signed, revocable, and time-limited.
-- Privileged routes are always gated.
-- Sensitive operations should be confirm-gated and should fail safely if the backend token does not have the required scope.
+The console includes an AI assistant designed for safe, controlled homelab management.
+- **Read-Only Streaming:** Answers questions and pulls live snapshots from server-side helpers.
+- **Gated Execution:** Actions are classified by risk. Depending on the mode, sensitive actions pause the stream and require explicit operator confirmation before executing.
+- **Controlled Tools:** The assistant communicates with backends via a generic `lab_request` tool. The execution logic never leaves the server.
 
 ## Development
 
-Common scripts:
-
-- `npm run dev` — start the development server.
+- `npm run dev` — start the Turbopack development server.
 - `npm run build` — create a production build.
 - `npm run start` — run the production server.
-- `npm run lint` — run linting.
 
-## Repository layout
+### Repository Layout
 
-- `app/` — routes, pages, and route handlers.
-- `components/` — reusable UI pieces and console panels.
-- `lib/` — server-side logic, API wrappers, auth, assistant tools, and shared helpers.
-- `data/` — runtime JSON state.
-- `middleware.ts` — route protection for privileged areas.
+- `app/` — routes, pages, and API handlers.
+- `components/` — UI elements and console panels.
+- `lib/` — server-side business logic, backend API wrappers, and assistant tools.
+- `data/` — uncommitted runtime JSON state.
 
-## Notes for deployment
+## Deployment
 
-- Keep secrets in `.env.local` and do not commit runtime state.
-- Ensure the deployment environment has the backend credentials required for the pages and the assistant to function.
-- Use a reverse proxy or tunnel with TLS for production.
+- Configure all required keys in `.env.local` (refer to `.env.example`).
+- Do not commit the `data/` directory or `.env.local`.
+- Use a reverse proxy with TLS for production traffic.
