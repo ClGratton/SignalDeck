@@ -618,7 +618,10 @@ export async function proxmoxRequest(
       res.status === 403
         ? ' — the API token lacks permission for this. Grant the needed Proxmox role (see CREDENTIALS.md) and retry.'
         : '';
-    return { ok: false, detail: `Proxmox returned HTTP ${res.status}${hint}.` };
+    return {
+      ok: false,
+      detail: `Proxmox returned HTTP ${res.status}${hint}.${res.data != null ? ' ' + clip(JSON.stringify(res.data)) : ''}`,
+    };
   }
   cache = null; // reflect the change on the next snapshot
   const summary =
@@ -655,7 +658,11 @@ export async function haRequest(
     ...(body != null ? { body } : {}),
   });
   if (!res) return { ok: false, detail: 'Home Assistant did not respond.' };
-  if (!res.ok) return { ok: false, detail: `Home Assistant returned HTTP ${res.status}.` };
+  if (!res.ok)
+    return {
+      ok: false,
+      detail: `Home Assistant returned HTTP ${res.status}.${res.data != null ? ' ' + clip(JSON.stringify(res.data)) : ''}`,
+    };
   cache = null;
   const summary = res.data != null ? clip(JSON.stringify(res.data)) : `HTTP ${res.status}`;
   return { ok: true, detail: `${method} ${path} → ${summary}` };
@@ -852,7 +859,11 @@ export async function labRequest(
         ...(body != null ? { body } : {}),
       });
       if (!res) return { ok: false, detail: 'Jellyfin did not respond.' };
-      if (!res.ok) return { ok: false, detail: `Jellyfin returned HTTP ${res.status}.` };
+      if (!res.ok)
+        return {
+          ok: false,
+          detail: `Jellyfin returned HTTP ${res.status}.${res.data != null ? ' ' + clip(JSON.stringify(res.data)) : ''}`,
+        };
       cache = null;
       return { ok: true, detail: `${method} ${p} → ${clip(JSON.stringify(res.data ?? null))}` };
     }
@@ -868,7 +879,11 @@ export async function labRequest(
         ...(body != null ? { body } : {}),
       });
       if (!res) return { ok: false, detail: 'Cloudflare did not respond.' };
-      if (!res.ok) return { ok: false, detail: `Cloudflare returned HTTP ${res.status}.` };
+      if (!res.ok)
+        return {
+          ok: false,
+          detail: `Cloudflare returned HTTP ${res.status}.${res.data != null ? ' ' + clip(JSON.stringify(res.data)) : ''}`,
+        };
       return { ok: true, detail: `${method} ${p} → ${clip(JSON.stringify(res.data ?? null))}` };
     }
   }

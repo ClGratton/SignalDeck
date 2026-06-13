@@ -192,14 +192,28 @@ function groupRows(items: Item[]): Row[] {
   return rows;
 }
 
+/** Collapse consecutive same-role turns — the chat APIs require alternating
+ *  user/assistant roles, and the packed tool results below produce runs of user
+ *  turns. */
+function mergeConsecutive(turns: ChatTurn[]): ChatTurn[] {
+  const out: ChatTurn[] = [];
+  for (const t of turns) {
+    const last = out[out.length - 1];
+    if (last && last.role === t.role) last.content += '\n' + t.content;
+    else out.push({ ...t });
+  }
+  return out;
+}
+
 /** Build the API transcript from the rich item list. Crucially this PACKS the
- *  outcomes of tool calls and actions back into the context as assistant notes:
- *  the chat APIs are stateless, so when you resume after the step cap (or send
- *  any new message) the model only knows what's in this payload. Sending
- *  user/assistant TEXT only made it forget the dozen steps it just ran and
- *  restart from scratch — so we replay each action's request + result and each
- *  lookup here. Consecutive same-role turns are merged (providers need
- *  alternating roles). */
+ *  outcomes of tool calls and actions back into the context so the model keeps
+ *  its execution memory (the chat APIs are stateless; only this payload exists).
+ *
+ *  These outcomes are framed as USER-role tool-result turns, NOT assistant text.
+ *  That's deliberate: putting "[action ran: …]" in the assistant's OWN voice made
+ *  the model imitate the format and write those brackets into its visible replies.
+ *  As tool results (the operator/system reporting back), it treats them as input
+ *  to act on, not prose to reproduce. */
 function buildHistory(items: Item[]): ChatTurn[] {
   const raw: ChatTurn[] = [];
   for (const it of items) {
@@ -209,27 +223,26 @@ function buildHistory(items: Item[]): ChatTurn[] {
       it.kind === 'action' &&
       (it.status === 'ok' || it.status === 'fail' || it.status === 'skipped')
     ) {
-      const verb = it.status === 'skipped' ? 'skipped by operator' : it.status === 'ok' ? 'ran' : 'failed';
-      const parts = [`[action ${verb}: ${it.title}`];
+      const head =
+        it.status === 'skipped'
+          ? `operator skipped "${it.title}" (did not run)`
+          : it.status === 'fail'
+            ? `"${it.title}" FAILED`
+            : `"${it.title}" ran`;
+      const parts = [head];
       if (it.request) parts.push(`sent ${clipText(it.request, 300)}`);
-      if (it.detail) parts.push(`→ ${clipText(it.detail, 1500)}`);
-      raw.push({ role: 'assistant', content: parts.join(' ') + ']' });
+      if (it.detail) parts.push(`result: ${clipText(it.detail, 1500)}`);
+      raw.push({ role: 'user', content: `(tool result — ${parts.join('; ')})` });
     } else if (it.kind === 'tool') {
-      raw.push({ role: 'assistant', content: `[used: ${it.label}]` });
+      raw.push({ role: 'user', content: `(tool result — looked up: ${it.label})` });
     } else if (it.kind === 'timer' && it.status !== 'running') {
       raw.push({
-        role: 'assistant',
-        content: `[waited for: ${it.label}${it.status === 'stopped' ? ' — paused by operator' : ''}]`,
+        role: 'user',
+        content: `(waited for: ${it.label}${it.status === 'stopped' ? ' — paused by operator' : ''})`,
       });
     }
   }
-  const merged: ChatTurn[] = [];
-  for (const t of raw) {
-    const last = merged[merged.length - 1];
-    if (last && last.role === t.role) last.content += '\n' + t.content;
-    else merged.push({ ...t });
-  }
-  return merged;
+  return mergeConsecutive(raw);
 }
 
 export function AssistantSidebar({
@@ -702,7 +715,7 @@ export function AssistantSidebar({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [...buildHistory(items), { role: 'user', content: instruction }],
+          messages: mergeConsecutive([...buildHistory(items), { role: 'user', content: instruction }]),
           mode: 'ask',
           approval,
           provider: effective.provider,
@@ -780,7 +793,7 @@ export function AssistantSidebar({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: [...history, { role: 'user', content: sent }],
+            messages: mergeConsecutive([...history, { role: 'user', content: sent }]),
             mode,
             approval,
             provider: effective.provider,
