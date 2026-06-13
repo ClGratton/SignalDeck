@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Eye, EyeOff, ShieldAlert, X } from 'lucide-react';
 import { useReveal } from './RevealProvider';
+import { AssistantSettings } from './AssistantSettings';
 import styles from './settings.module.css';
 
 interface FieldDto {
@@ -20,6 +21,8 @@ interface FieldDto {
   placeholder?: string;
   privilegedForActions: boolean;
   source: 'override' | 'env' | null;
+  /** Present for non-secret fields only — shown/edited directly. */
+  value?: string;
 }
 
 type Draft = { value: string; revealed: boolean; dirty: boolean; saving?: boolean; saved?: boolean };
@@ -33,7 +36,20 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/settings', { cache: 'no-store' });
-      if (res.ok) setFields(((await res.json()) as { fields: FieldDto[] }).fields);
+      if (res.ok) {
+        const fs = ((await res.json()) as { fields: FieldDto[] }).fields;
+        setFields(fs);
+        // Seed non-secret values straight into the editable fields.
+        setDrafts((d) => {
+          const next = { ...d };
+          for (const f of fs) {
+            if (!f.secret && f.value != null && next[f.name] == null) {
+              next[f.name] = { value: f.value, revealed: true, dirty: false };
+            }
+          }
+          return next;
+        });
+      }
     } catch {
       setFields([]);
     }
@@ -62,6 +78,28 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     const value = await reveal('/api/settings/reveal', { name: f.name });
     if (value != null) setDraft(f.name, { value, revealed: true, dirty: false });
   };
+
+  // Direct save (no draft/dirty dance) — used by the multiplier dropdown.
+  const saveValue = useCallback(async (name: string, value: string) => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, value }),
+      });
+      const body = (await res.json()) as { source?: FieldDto['source']; error?: string };
+      if (res.ok) {
+        setFields(
+          (fs) =>
+            fs?.map((x) =>
+              x.name === name ? { ...x, source: body.source ?? x.source, value } : x,
+            ) ?? fs,
+        );
+      }
+    } catch {
+      /* ignore — the dropdown keeps the prior value */
+    }
+  }, []);
 
   const onSave = async (f: FieldDto) => {
     const d = drafts[f.name];
@@ -109,13 +147,13 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             className={`${styles.input} ${f.secret ? 'mono' : ''}`}
             value={d.value}
             placeholder={
-              d.revealed
-                ? ''
-                : f.source
-                  ? f.secret
+              f.secret
+                ? d.revealed
+                  ? ''
+                  : f.source
                     ? '•••••• (set — eye to reveal)'
-                    : '(set — eye to reveal)'
-                  : (f.placeholder ?? '')
+                    : (f.placeholder ?? '')
+                : (f.placeholder ?? '')
             }
             onChange={(e) => setDraft(f.name, { value: e.target.value, dirty: true })}
             autoComplete="off"
@@ -189,7 +227,17 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 <ShieldAlert size={12} strokeWidth={2.4} aria-hidden /> need an elevated token for the
                 assistant to perform actions (see CREDENTIALS.md).
               </p>
-              {fields.filter((f) => f.group === active).map(renderField)}
+              {fields
+                .filter((f) => f.group === active && f.name !== 'ASSISTANT_MULTIPLIER_MODEL')
+                .map(renderField)}
+              {active === 'Assistant' ? (
+                <AssistantSettings
+                  multiplierValue={
+                    fields.find((f) => f.name === 'ASSISTANT_MULTIPLIER_MODEL')?.value ?? ''
+                  }
+                  onSaveMultiplier={(v) => void saveValue('ASSISTANT_MULTIPLIER_MODEL', v)}
+                />
+              ) : null}
             </div>
           </div>
         )}

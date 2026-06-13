@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { hasValidSession } from '@/lib/session';
-import { SERVICE_FIELDS, fieldSource, setOverride } from '@/lib/service-config';
+import { SERVICE_FIELDS, fieldSource, setOverride, revealField } from '@/lib/service-config';
 
 export const runtime = 'nodejs';
 
@@ -20,6 +20,10 @@ export async function GET() {
     placeholder: f.placeholder,
     privilegedForActions: f.privilegedForActions === true,
     source: fieldSource(f.name),
+    // Non-secret values (host URLs, ports, zone ids, step cap) are safe to show
+    // the authenticated operator directly — no eye/re-auth dance for a hostname.
+    // Secret values are NEVER included here; they stay behind the reveal route.
+    value: f.secret ? undefined : (revealField(f.name) ?? undefined),
   }));
   return NextResponse.json({ fields }, { headers: { 'Cache-Control': 'private, no-store' } });
 }

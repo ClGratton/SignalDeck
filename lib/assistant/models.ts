@@ -16,18 +16,33 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AssistantProvider, ModelOption } from '@/lib/assistant/types';
 import { getProviderKey, getProviderBaseUrl, providerDef, PROVIDERS } from '@/lib/assistant/keys';
+import { cfg } from '@/lib/service-config';
 
 const FILE = path.join(process.cwd(), 'data', 'assistant-models.json');
 const LIST_TTL_MS = 6 * 60 * 60 * 1000; // model lists: refresh every 6h
-const MULT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // multipliers: weekly is plenty
+const MULT_TTL_MS = 24 * 60 * 60 * 1000; // multipliers: daily — fresh but not chatty
 const FETCH_TIMEOUT_MS = 10_000;
+
+/** The owner-chosen model that estimates multipliers, as {provider, model}.
+ *  Stored "provider:model" in the config; null when unset or its provider has
+ *  no key (then we fall back to each provider pricing its own list). */
+function multiplierEstimator(): { provider: AssistantProvider; model: string } | null {
+  const raw = cfg('ASSISTANT_MULTIPLIER_MODEL');
+  if (!raw) return null;
+  const i = raw.indexOf(':');
+  if (i < 0) return null;
+  const provider = raw.slice(0, i) as AssistantProvider;
+  const model = raw.slice(i + 1).trim();
+  if (!model || !PROVIDERS.some((p) => p.id === provider) || !getProviderKey(provider)) return null;
+  return { provider, model };
+}
 
 interface CatalogEntry {
   fetchedAt: number;
   models: { id: string; label: string }[];
 }
 type CatalogFile = Partial<Record<AssistantProvider, CatalogEntry>> & {
-  multipliers?: { fetchedAt: number; values: Record<string, number> };
+  multipliers?: { fetchedAt: number; values: Record<string, number>; by?: string };
 };
 
 const FALLBACK: Record<AssistantProvider, { id: string; label: string }[]> = {
@@ -242,47 +257,71 @@ const MULT_RETRY_MS = 5 * 60 * 1000; // failed attempts retry after 5 min, not w
 export function refreshMultipliersInBackground(): void {
   const cat = readCatalog();
   const current = cat.multipliers;
+  const estimator = multiplierEstimator();
+  const estimatorId = estimator ? `${estimator.provider}:${estimator.model}` : 'per-provider';
   if (multiplierRefreshInflight) return;
-  if (current && Object.keys(current.values).length > 0 && Date.now() - current.fetchedAt < MULT_TTL_MS) {
-    return;
-  }
+  // Stale if: never run, TTL expired, OR the chosen estimator changed (so a new
+  // pick re-prices everything immediately instead of waiting out the day).
+  const fresh =
+    current &&
+    Object.keys(current.values).length > 0 &&
+    Date.now() - current.fetchedAt < MULT_TTL_MS &&
+    (current.by ?? 'per-provider') === estimatorId;
+  if (fresh) return;
   if (Date.now() - multiplierLastAttempt < MULT_RETRY_MS) return;
   multiplierLastAttempt = Date.now();
   multiplierRefreshInflight = true;
 
   void (async () => {
-    const values: Record<string, number> = { ...(current?.values ?? {}) };
+    // A chosen estimator re-prices from scratch (its view of every model). The
+    // per-provider fallback merges onto whatever's there.
+    const values: Record<string, number> = estimator ? {} : { ...(current?.values ?? {}) };
     let gotAny = false;
-    for (const provider of PROVIDERS.map((p) => p.id)) {
-      const key = getProviderKey(provider);
-      if (!key) continue;
-      try {
-        const ids = (await listProviderModels(provider)).map((m) => m.id);
-        const estimated = await estimateMultipliers(provider, key, ids);
-        for (const [id, mult] of Object.entries(estimated)) {
-          if (ids.includes(id) && typeof mult === 'number' && mult >= 0.05 && mult <= 100) {
-            values[id] = Math.round(mult * 100) / 100;
-            gotAny = true;
-          }
+    const take = (estimated: Record<string, unknown>, validIds: Set<string>) => {
+      for (const [id, mult] of Object.entries(estimated)) {
+        if (validIds.has(id) && typeof mult === 'number' && mult >= 0.05 && mult <= 100) {
+          values[id] = Math.round(mult * 100) / 100;
+          gotAny = true;
         }
-      } catch (err) {
-        console.warn(
-          `[assistant] multiplier estimate failed for ${provider}:`,
-          (err as Error)?.message ?? err,
-        );
       }
+    };
+
+    try {
+      if (estimator) {
+        // One capable model prices EVERY provider's models in one shot — far
+        // better than asking each model about its own (unknown) pricing.
+        const allIds: string[] = [];
+        for (const provider of PROVIDERS.map((p) => p.id)) {
+          if (getProviderKey(provider)) allIds.push(...(await listProviderModels(provider)).map((m) => m.id));
+        }
+        const key = getProviderKey(estimator.provider)!;
+        take(await estimateMultipliers(estimator.provider, key, allIds, estimator.model), new Set(allIds));
+      } else {
+        for (const provider of PROVIDERS.map((p) => p.id)) {
+          const key = getProviderKey(provider);
+          if (!key) continue;
+          const ids = (await listProviderModels(provider)).map((m) => m.id);
+          take(await estimateMultipliers(provider, key, ids), new Set(ids));
+        }
+      }
+    } catch (err) {
+      console.warn('[assistant] multiplier estimate failed:', (err as Error)?.message ?? err);
     }
-    // Only stamp a fresh fetchedAt when something came back — otherwise the
-    // next catalog fetch retries instead of waiting out the weekly TTL.
+
+    // Only stamp a fresh fetchedAt when something came back — otherwise the next
+    // catalog fetch retries (after MULT_RETRY_MS) instead of waiting out the TTL.
     if (gotAny) {
-      writeCatalog({ ...readCatalog(), multipliers: { fetchedAt: Date.now(), values } });
+      writeCatalog({
+        ...readCatalog(),
+        multipliers: { fetchedAt: Date.now(), values, by: estimatorId },
+      });
     }
     multiplierRefreshInflight = false;
   })();
 }
 
 const MULT_PROMPT = (ids: string[]) =>
-  `Below is a list of AI model IDs. Return ONLY a JSON object (no prose, no code fences) mapping each model id you are CONFIDENT about to its approximate API price multiplier relative to a 1x baseline, where 1x = Gemini 2.5 Flash per-token API pricing. Blend input and output pricing. Use values like 0.25, 0.5, 1, 2, 4, 10, 30. OMIT any id whose pricing you are not sure about.\n\n${ids.join('\n')}`;
+  `Below is a list of AI model IDs from several providers. Return ONLY a JSON object (no prose, no code fences) mapping EVERY id to its approximate API price multiplier relative to a 1x baseline, where 1x = Gemini 2.5 Flash per-token API pricing. Blend input and output pricing. Use values like 0.25, 0.5, 1, 2, 4, 10, 30. Give your BEST estimate from the model family and size even across providers — only omit an id if you genuinely have no idea what model it is.\n\n${ids.join('\n')}`;
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
   const cleaned = text.replace(/```(?:json)?/g, '').trim();
@@ -300,11 +339,13 @@ async function estimateMultipliers(
   provider: AssistantProvider,
   key: string,
   ids: string[],
+  modelOverride?: string,
 ): Promise<Record<string, unknown>> {
   if (ids.length === 0) return {};
-  // Cheapest sibling does the pricing lookup — never the expensive models.
+  // Cheapest sibling does the pricing lookup — never the expensive models —
+  // unless the owner picked a specific estimator model (modelOverride).
   if (provider === 'anthropic') {
-    const model = ids.find((id) => id.includes('haiku')) ?? ids[ids.length - 1];
+    const model = modelOverride ?? ids.find((id) => id.includes('haiku')) ?? ids[ids.length - 1];
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -330,7 +371,7 @@ async function estimateMultipliers(
   }
   if (providerDef(provider)?.kind === 'gemini') {
     const model =
-      ids.find((id) => id.includes('flash-lite')) ?? ids.find((id) => id.includes('flash')) ?? ids[0];
+      modelOverride ?? ids.find((id) => id.includes('flash-lite')) ?? ids.find((id) => id.includes('flash')) ?? ids[0];
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
@@ -355,7 +396,7 @@ async function estimateMultipliers(
   const base = getProviderBaseUrl(provider);
   if (!base) return {};
   const model =
-    ids.find((id) => /mini|lite|air|flash|haiku|small|chat/.test(id)) ?? ids[ids.length - 1];
+    modelOverride ?? ids.find((id) => /mini|lite|air|flash|haiku|small|chat/.test(id)) ?? ids[ids.length - 1];
   const res = await fetch(`${base.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },

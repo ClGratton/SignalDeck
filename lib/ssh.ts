@@ -23,9 +23,12 @@ export function sshConfigured(): boolean {
   return !!cfg('SSH_HOST') && !!cfg('SSH_USER') && !!(cfg('SSH_PASSWORD') || cfg('SSH_PRIVATE_KEY'));
 }
 
-/** Run one command over SSH and return combined stdout/stderr (clipped). */
-export function sshRun(command: string): Promise<{ ok: boolean; detail: string }> {
-  const host = cfg('SSH_HOST');
+/** Run one command over SSH and return combined stdout/stderr (clipped). An
+ *  optional `hostOverride` targets a specific cluster node directly (same
+ *  credentials) instead of the configured entry host — so reaching another
+ *  Proxmox node isn't a "work around the default", just a parameter. */
+export function sshRun(command: string, hostOverride?: string): Promise<{ ok: boolean; detail: string }> {
+  const host = (hostOverride && hostOverride.trim()) || cfg('SSH_HOST');
   const user = cfg('SSH_USER');
   const password = cfg('SSH_PASSWORD');
   const privateKey = cfg('SSH_PRIVATE_KEY');

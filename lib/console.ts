@@ -748,6 +748,66 @@ function truenasRpcCall(
   });
 }
 
+/** One Home Assistant WebSocket command. The HA REST API can read states and
+ *  manage config ENTRIES, but the entity/device registry (e.g. removing an
+ *  orphaned entity) is WebSocket-only. Crucially the token lives HERE on the
+ *  server — so we call HA directly instead of the agent trying to shell into the
+ *  HA container, where the env is blank and no token is available. */
+function haWsCall(
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<{ ok: boolean; detail: string }> {
+  const host = cfg('HOMEASSISTANT_HOST');
+  const token = cfg('HOMEASSISTANT_TOKEN');
+  if (!host || !token) return Promise.resolve({ ok: false, detail: 'Home Assistant is not configured.' });
+  const wsUrl = trimSlash(host).replace(/^http/i, 'ws') + '/api/websocket';
+  return new Promise((resolve) => {
+    let settled = false;
+    let ws: WebSocket;
+    const done = (r: { ok: boolean; detail: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        /* closing */
+      }
+      resolve(r);
+    };
+    const timer = setTimeout(() => done({ ok: false, detail: 'Home Assistant WebSocket timed out.' }), RPC_TIMEOUT_MS);
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch {
+      return done({ ok: false, detail: 'Could not open the Home Assistant WebSocket.' });
+    }
+    ws.addEventListener('error', () => done({ ok: false, detail: 'Home Assistant WebSocket error.' }));
+    ws.addEventListener('close', () => done({ ok: false, detail: 'Home Assistant closed the connection.' }));
+    ws.addEventListener('message', (ev: MessageEvent) => {
+      let msg: { type?: string; id?: number; success?: boolean; result?: unknown; error?: { message?: string } };
+      try {
+        msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
+      } catch {
+        return;
+      }
+      if (msg.type === 'auth_required') {
+        ws.send(JSON.stringify({ type: 'auth', access_token: token }));
+      } else if (msg.type === 'auth_invalid') {
+        done({ ok: false, detail: 'Home Assistant rejected the token (needs an admin long-lived token).' });
+      } else if (msg.type === 'auth_ok') {
+        ws.send(JSON.stringify({ id: 1, type, ...payload }));
+      } else if (msg.type === 'result' && msg.id === 1) {
+        cache = null;
+        if (msg.success === false) {
+          done({ ok: false, detail: `HA WS ${type}: ${msg.error?.message ?? 'failed'}` });
+        } else {
+          done({ ok: true, detail: `HA WS ${type} → ${clip(JSON.stringify(msg.result ?? 'ok'))}` });
+        }
+      }
+    });
+  });
+}
+
 /** The universal action. `service` selects the backend; `path` is that service's
  *  endpoint (or, for TrueNAS, the JSON-RPC method name) and `body` the payload. */
 export async function labRequest(
@@ -763,8 +823,16 @@ export async function labRequest(
         path,
         body && typeof body === 'object' ? (body as Record<string, unknown>) : undefined,
       );
-    case 'homeassistant':
+    case 'homeassistant': {
+      // A namespaced command with no leading slash (e.g. "config/entity_registry/
+      // remove") is a WebSocket command — the only way to touch the registry. A
+      // "/..." path, or a bare REST word like "states", stays REST.
+      const p = path.trim();
+      if (p && !p.startsWith('/') && p.includes('/')) {
+        return haWsCall(p, body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {});
+      }
       return haRequest(method, path, body);
+    }
     case 'truenas': {
       const host = cfg('TRUENAS_HOST');
       const key = cfg('TRUENAS_API_KEY');

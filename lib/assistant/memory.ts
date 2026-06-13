@@ -72,10 +72,25 @@ export function addMemory(text: string): { ok: boolean; detail: string; note?: M
   return { ok: true, detail: 'Saved.', note };
 }
 
-export function deleteMemory(id: string): boolean {
+/** Resolve a full id OR a short prefix (the prompt shows 8-char ids) to a note. */
+function resolve(idOrPrefix: string): MemoryNote | undefined {
   const notes = read();
-  const next = notes.filter((n) => n.id !== id);
-  if (next.length === notes.length) return false;
-  write(next);
+  return notes.find((n) => n.id === idOrPrefix) ?? notes.find((n) => n.id.startsWith(idOrPrefix));
+}
+
+export function deleteMemory(idOrPrefix: string): boolean {
+  const target = resolve(idOrPrefix);
+  if (!target) return false;
+  write(read().filter((n) => n.id !== target.id));
   return true;
+}
+
+/** Correct a note in place (the assistant fixing a fact it found to be wrong). */
+export function updateMemory(idOrPrefix: string, text: string): { ok: boolean; detail: string } {
+  const target = resolve(idOrPrefix);
+  if (!target) return { ok: false, detail: 'No memory note matches that id.' };
+  const trimmed = text.trim().slice(0, MAX_CHARS);
+  if (trimmed.length < 3) return { ok: false, detail: 'New text is empty.' };
+  write(read().map((n) => (n.id === target.id ? { ...n, text: trimmed } : n)));
+  return { ok: true, detail: 'Updated.' };
 }

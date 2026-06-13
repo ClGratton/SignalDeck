@@ -26,10 +26,14 @@ Pick the service; the server resolves base URL + auth. Explore with reads first,
 - DELETE /nodes/{node}/{lxc|qemu}/{vmid} — DESTROY (guest must be stopped first).
 - The REST API CANNOT exec inside a guest or open a shell (you'll get 501) — use run_shell for that.
 
-## homeassistant  (HA REST, /api/)
+## homeassistant  (two transports, chosen by the path)
+REST (path STARTS WITH "/", under /api/):
 - GET /api/states , /api/error_log , /api/logbook/{ISO_ts} , /api/history/period/{ISO_ts}
 - POST /api/template  body {"template":"..."} — render a value.
-- GET /api/config/config_entries  →  DELETE /api/config/config_entries/entry/{entry_id} removes an integration + its devices/entities. Removing a single registry entity is WebSocket-only — give the operator the UI step instead.
+- GET /api/config/config_entries  →  DELETE /api/config/config_entries/entry/{entry_id} removes an integration + its devices/entities.
+WebSocket (path has NO leading slash = the command type, body = the rest of the message). The registry is WS-only and the server holds the token, so do this here — never SSH into the HA container (its env is blank, no token):
+- "config/entity_registry/list" ; "config/entity_registry/remove" body {"entity_id":"sensor.x"} — delete one orphaned entity.
+- "config/device_registry/list" ; "config/area_registry/list".
 
 ## truenas  (JSON-RPC 2.0; path = method, body = params array)
 - pool.query , pool.dataset.query , disk.temperatures , app.query/app.start/app.stop , replication.run
@@ -42,17 +46,18 @@ Pick the service; the server resolves base URL + auth. Explore with reads first,
 
 const SSH = `# run_shell — shell access over SSH
 
-When the REST APIs can't do it (exec in a guest, read logs, inspect a file), run a command on the SSH host configured in Settings (point it at the Proxmox node).
+When the REST APIs can't do it (exec in a guest, read logs, inspect a file), run a command over SSH. It lands on the configured entry host by default; on a multi-node cluster pass run_shell's \`host\` to the node that owns the guest so you reach it directly — that's a parameter, not a default to work around.
 
-From the Proxmox host you can reach every container:
-- pct exec {vmid} -- {command}        # run a command inside an LXC container
+From a Proxmox node you can reach its local containers:
+- pct exec {vmid} -- {command}        # run a command inside an LXC container ON THAT node
 - pct exec {vmid} -- journalctl -u {service} -n 50 --no-pager
 - qm guest exec {vmid} --             # for QEMU VMs (needs qemu-guest-agent)
 - cat /etc/pve/... , journalctl ... , systemctl status {service}
 
 Rules:
+- A guest only exists on ITS node. Get the owning node + real vmid from GET /cluster/resources, then set run_shell \`host\` to that node — don't assume one node, don't ssh-hop as a workaround.
 - run_shell is ALWAYS a critical action (it can do anything) — it confirms in agent "all"/"critical" modes.
-- Get the real vmid from GET /cluster/resources (or memory), not the snapshot.
+- Prefer the proper API first: e.g. HA registry edits go through lab_request homeassistant WebSocket commands (the server has the token), NOT by shelling into the HA container.
 - Keep commands read-only unless the task is explicitly to change something. Report exit code + output.
 - If SSH is not configured, tell the operator to add it in Settings; do not guess.`;
 

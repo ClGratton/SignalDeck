@@ -32,7 +32,7 @@ import { getHistoryRecord } from '@/lib/history-store';
 import { buildServiceHistories } from '@/lib/history';
 import { sshRun, sshConfigured } from '@/lib/ssh';
 import { addProposal } from '@/lib/assistant/proposals';
-import { addMemory } from '@/lib/assistant/memory';
+import { addMemory, updateMemory, deleteMemory } from '@/lib/assistant/memory';
 import { readReference, REFERENCE_TOPICS } from '@/lib/assistant/reference';
 import type {
   AssistantEvent,
@@ -104,6 +104,31 @@ const READ_TOOLS: ToolDef[] = [
         text: { type: 'string', description: 'The note to remember, one concise fact.' },
       },
       required: ['text'],
+    },
+  },
+  {
+    name: 'update_memory',
+    description:
+      'Correct a durable memory note in place when you find it is WRONG or STALE (e.g. a guest moved nodes, a vmid changed). Pass the note id shown in brackets before each note in your memory, and the corrected text. Keep memory accurate — do not leave a known-wrong note sitting there.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The id shown in [brackets] before the note.' },
+        text: { type: 'string', description: 'The corrected note text.' },
+      },
+      required: ['id', 'text'],
+    },
+  },
+  {
+    name: 'forget_memory',
+    description:
+      'Delete a durable memory note that is no longer true or never should have been saved. Pass the note id shown in brackets before it. Use this to keep global memory clean — but only for genuinely wrong/obsolete facts, not to clear correct ones.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The id shown in [brackets] before the note.' },
+      },
+      required: ['id'],
     },
   },
   {
@@ -189,7 +214,7 @@ const ACTION_TOOLS: ToolDef[] = [
     description:
       'Your UNIVERSAL hands: make a direct call to ANY of the lab\'s backend APIs. Pick the `service` and the server handles that backend\'s base URL, auth, and transport — you just reason about the endpoint. This is how you do anything the convenience tools (guest_power, ha_service) do not cover. You are expected to know these APIs; explore with reads (GET / .query) first, then act.\n' +
       '- service "proxmox": Proxmox VE REST under /api2/json. e.g. DELETE /nodes/{node}/lxc/{vmid} destroys a container; POST .../config reconfigures; GET .../tasks reads history. `body` = form params.\n' +
-      '- service "homeassistant": Home Assistant REST under /api/. e.g. GET /api/error_log; GET /api/config/config_entries then DELETE /api/config/config_entries/entry/{id} to remove an integration + its devices/entities; GET /api/history/period/{ts}. (Deleting ONE registry entity is WebSocket-only — if a config-entry delete is too broad, tell the operator the one UI step.)\n' +
+      '- service "homeassistant": a path STARTING WITH "/" is REST under /api/ (e.g. GET /api/error_log; GET /api/config/config_entries; GET /api/history/period/{ts}). A path WITHOUT a leading slash is a WebSocket command type — the ONLY way to touch the entity/device registry. e.g. path "config/entity_registry/remove" body {"entity_id":"sensor.x"} removes one orphaned entity; "config/entity_registry/list", "config/device_registry/remove_config_entry". The server calls HA directly with its own token — never shell into the HA container to do this.\n' +
       '- service "truenas": TrueNAS SCALE JSON-RPC 2.0 (no REST). Put the RPC METHOD in `path` (e.g. "pool.dataset.query", "app.start", "replication.run") and its params array in `body`.\n' +
       '- service "jellyfin": Jellyfin REST. e.g. GET /Sessions, GET /System/Info, POST /Items/{id}/... `path` is the endpoint.\n' +
       '- service "cloudflare": Cloudflare REST under /client/v4 (auto-prefixed). e.g. GET /client/v4/zones/{zone}/dns_records.\n' +
@@ -223,11 +248,15 @@ const ACTION_TOOLS: ToolDef[] = [
   {
     name: 'run_shell',
     description:
-      'Run a shell command over SSH on the lab host (the Proxmox node) — for what no REST API can do: exec inside a container (pct exec {vmid} -- ...), read logs (journalctl), inspect files, check services. Always a critical action. Call read_reference("ssh") for the patterns. Keep commands read-only unless the task is to change something. If SSH is not configured the result will say so — then tell the operator to add it in Settings.',
+      'Run a shell command over SSH on a lab host — for what no REST API can do: exec inside a container (pct exec {vmid} -- ...), read logs (journalctl), inspect files, check services. By default it lands on the configured entry host; in a multi-node cluster set `host` to the node that actually owns the guest (get the node from GET /cluster/resources) so you reach it directly instead of hopping. Always a critical action. Call read_reference("ssh") for the patterns. Keep commands read-only unless the task is to change something.',
     input_schema: {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'The shell command to run on the host.' },
+        host: {
+          type: 'string',
+          description: 'Optional: the cluster node hostname/IP to run on (same credentials). Use the node that owns the target guest. Omit for the default entry host.',
+        },
         summary: { type: 'string', description: 'Short human summary for the action card.' },
       },
       required: ['command', 'summary'],
@@ -248,6 +277,10 @@ export function toolLabel(name: string): string {
       return 'read lab snapshot';
     case 'save_memory':
       return 'saved a memory note';
+    case 'update_memory':
+      return 'corrected a memory note';
+    case 'forget_memory':
+      return 'deleted a memory note';
     case 'list_ha_entities':
       return 'listed HA entities';
     case 'get_service_history':
@@ -361,6 +394,16 @@ export async function executeTool(
       };
     }
 
+    case 'update_memory': {
+      const result = updateMemory(str(args.id), str(args.text));
+      return { content: result.ok ? 'Memory note corrected.' : `Could not update: ${result.detail}`, isError: !result.ok };
+    }
+
+    case 'forget_memory': {
+      const ok = deleteMemory(str(args.id));
+      return { content: ok ? 'Memory note deleted.' : 'No memory note matched that id.', isError: !ok };
+    }
+
     case 'list_ha_entities': {
       const states = await haListStates();
       if (!states) return { content: 'Home Assistant is not configured or unreachable.', isError: true };
@@ -416,6 +459,7 @@ export async function executeTool(
 
     case 'run_shell': {
       const command = str(args.command);
+      const host = str(args.host);
       const summary = str(args.summary) || command.slice(0, 60);
       if (!command) return { content: 'Invalid run_shell arguments (command required).', isError: true };
       if (!sshConfigured()) {
@@ -428,9 +472,9 @@ export async function executeTool(
       return dispatchAction(
         {
           title: summary,
-          detail: `SSH: ${command}`,
+          detail: `SSH${host ? ` @${host}` : ''}: ${command}`,
           critical: true, // shell access is always critical
-          run: () => sshRun(command),
+          run: () => sshRun(command, host || undefined),
         },
         ctx,
       );

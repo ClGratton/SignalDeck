@@ -70,6 +70,8 @@ const SUGGESTIONS = ['What is running right now?', 'How full is storage?', 'Anyo
 
 const CHATS_KEY = 'grtlabs:assistant-chats:v1';
 const PICK_KEY = 'grtlabs:assistant-pick:v1';
+const MRU_KEY = 'grtlabs:assistant-mru:v1';
+const MRU_MAX = 3; // how many recently-used models lead the menu per provider
 const MODE_KEY = 'grtlabs:assistant-mode';
 const APPROVAL_KEY = 'grtlabs:assistant-approval';
 const LEGACY_ACTIONS_KEY = 'grtlabs:assistant-actions';
@@ -241,6 +243,9 @@ export function AssistantSidebar({
   // Model menu state
   const [catalog, setCatalog] = useState<ModelsResponse | null>(null);
   const [pick, setPick] = useState<{ provider: AssistantProvider; model: string } | null>(null);
+  // Recently-used model ids per provider — these lead the menu, bumping the
+  // default featured picks into "More models" once you've used 3 others.
+  const [mru, setMru] = useState<Partial<Record<AssistantProvider, string[]>>>({});
   const [mode, setMode] = useState<AssistantMode>('agent');
   const [approval, setApproval] = useState<ApprovalLevel>('critical');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -300,6 +305,7 @@ export function AssistantSidebar({
       })
         .then((r) => {
           if (r.status === 401) setSessionExpired(true);
+          else if (r.ok) setSessionExpired(false);
         })
         .catch(() => {
           /* offline — localStorage still holds it; the next write retries */
@@ -384,6 +390,7 @@ export function AssistantSidebar({
       })
       .then((server) => {
         if (!server) return; // offline / unauth — the local cache stands
+        setSessionExpired(false); // a good response means the session is fine
         const serverChats = (server.chats ?? []).map((c) => ({
           ...c,
           items: sanitizeItems(c.items),
@@ -412,6 +419,8 @@ export function AssistantSidebar({
     try {
       const rawPick = window.localStorage.getItem(PICK_KEY);
       if (rawPick) setPick(JSON.parse(rawPick) as { provider: AssistantProvider; model: string });
+      const rawMru = window.localStorage.getItem(MRU_KEY);
+      if (rawMru) setMru(JSON.parse(rawMru) as Partial<Record<AssistantProvider, string[]>>);
       const savedMode = window.localStorage.getItem(MODE_KEY);
       if (savedMode === 'ask' || savedMode === 'agent') setMode(savedMode);
       else if (window.localStorage.getItem(LEGACY_ACTIONS_KEY) === '0') setMode('ask');
@@ -447,6 +456,11 @@ export function AssistantSidebar({
   useEffect(() => {
     void loadCatalog();
   }, [loadCatalog]);
+  // Re-fetch when the menu opens so freshly-estimated multipliers (the GET also
+  // kicks the background refresh) show up without a full page reload.
+  useEffect(() => {
+    if (menuOpen) void loadCatalog();
+  }, [menuOpen, loadCatalog]);
 
   const effective = useMemo((): { provider: AssistantProvider; model: string } | null => {
     if (!catalog) return providerHint ? { provider: providerHint, model: '' } : null;
@@ -474,6 +488,17 @@ export function AssistantSidebar({
   const choose = (provider: AssistantProvider, model: string) => {
     const next = { provider, model };
     setPick(next);
+    // Bump this model to the front of the provider's recently-used list.
+    setMru((prev) => {
+      const list = [model, ...(prev[provider] ?? []).filter((m) => m !== model)].slice(0, MRU_MAX);
+      const updated = { ...prev, [provider]: list };
+      try {
+        window.localStorage.setItem(MRU_KEY, JSON.stringify(updated));
+      } catch {
+        /* fine */
+      }
+      return updated;
+    });
     try {
       window.localStorage.setItem(PICK_KEY, JSON.stringify(next));
     } catch {
@@ -766,6 +791,7 @@ export function AssistantSidebar({
           return;
         }
 
+        setSessionExpired(false); // got a live stream — the session is valid
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -1170,6 +1196,7 @@ export function AssistantSidebar({
         </div>
       )}
 
+      {view === 'chat' ? (
       <div className={styles.composerArea}>
         {menuOpen ? (
           <>
@@ -1188,10 +1215,20 @@ export function AssistantSidebar({
                     const all = catalog?.models[p.id] ?? [];
                     const isSel = (id: string) =>
                       effective?.provider === p.id && effective.model === id;
-                    // Featured (plus the current pick, wherever it lives) up
-                    // front; the registry's long tail behind "More models".
-                    const lead = all.filter((m) => m.featured || isSel(m.id));
-                    const rest = all.filter((m) => !m.featured && !isSel(m.id));
+                    // The lead list is capped at MRU_MAX: recently-used models
+                    // first, then the default featured picks fill any remaining
+                    // slots. Use 3 other models and the defaults drop into "More".
+                    const ids = new Set(all.map((m) => m.id));
+                    const recent = (mru[p.id] ?? []).filter((id) => ids.has(id));
+                    const featured = all.filter((m) => m.featured).map((m) => m.id);
+                    const mainIds = new Set<string>();
+                    for (const id of [...recent, ...featured]) {
+                      if (mainIds.size >= MRU_MAX) break;
+                      mainIds.add(id);
+                    }
+                    const inMain = (id: string) => mainIds.has(id) || isSel(id);
+                    const lead = all.filter((m) => inMain(m.id));
+                    const rest = all.filter((m) => !inMain(m.id));
                     const showRest = moreOpen[p.id] === true;
                     const row = (m: (typeof all)[number]) => (
                       <button
@@ -1458,6 +1495,7 @@ export function AssistantSidebar({
           )}
         </form>
       </div>
+      ) : null}
     </aside>
   );
 }

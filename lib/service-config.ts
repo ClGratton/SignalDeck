@@ -53,6 +53,13 @@ export const SERVICE_FIELDS: ServiceField[] = [
   // How many tool steps the agent may take in ONE turn before it pauses and asks
   // you to continue. Higher = longer autonomous runs before a checkpoint.
   { name: 'ASSISTANT_MAX_STEPS', label: 'Agent steps per turn (default 60)', group: 'Assistant', secret: false, placeholder: '60' },
+  // Which model estimates the price multipliers shown in the model menu, stored
+  // as "provider:model". One capable model prices every model better than asking
+  // each provider about itself. Chosen via a dropdown in Settings.
+  { name: 'ASSISTANT_MULTIPLIER_MODEL', label: 'Token-multiplier model', group: 'Assistant', secret: false },
+  // Seconds to wait on a single backend REST call before giving up (so a dead
+  // service returns an error instead of stalling the turn). Default 3.5s.
+  { name: 'ASSISTANT_REQUEST_TIMEOUT', label: 'Backend request timeout (seconds, default 3.5)', group: 'Assistant', secret: false, placeholder: '3.5' },
 ];
 
 const FIELD_NAMES = new Set(SERVICE_FIELDS.map((f) => f.name));

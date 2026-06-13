@@ -49,6 +49,15 @@ export interface HomelabSummary {
 const CACHE_TTL_MS = 15_000;
 const TIMEOUT_MS = 3_500;
 
+/** Per-call backend timeout, owner-tunable via Settings (ASSISTANT_REQUEST_TIMEOUT,
+ *  in seconds). Clamped to a sane band so a dead service errors out instead of
+ *  stalling a turn, and a typo can't hang it forever. Default 3.5s. */
+function requestTimeoutMs(): number {
+  const s = Number(cfg('ASSISTANT_REQUEST_TIMEOUT'));
+  if (!Number.isFinite(s) || s <= 0) return TIMEOUT_MS;
+  return Math.min(Math.max(s * 1000, 1000), 120_000);
+}
+
 export interface JsonResult {
   ok: boolean;
   status: number;
@@ -113,7 +122,7 @@ export function labFetch(rawUrl: string, opts: FetchOpts = {}): Promise<JsonResu
           ...opts.headers,
         },
         rejectUnauthorized: opts.verifyTls !== false,
-        timeout: TIMEOUT_MS,
+        timeout: requestTimeoutMs(),
       },
       (res) => {
         const chunks: Buffer[] = [];
