@@ -1,0 +1,3 @@
+# Keeps the public/ directory present so the Dockerfile's
+# `COPY --from=build /app/public ./public` always has a source.
+# Drop real static assets (favicons, og-images, robots.txt) here as needed.

@@ -25,20 +25,34 @@ volume** mounted at `/app/data`.
 
 ---
 
-## 1. Stand up Coolify (once)
-Create a small VM or LXC on Proxmox for Coolify itself (keep it separate from the
-app):
-- **Debian 12** VM, 2 vCPU, 2–4 GB RAM, 30 GB disk. (Coolify needs Docker; a VM
-  is the least-friction choice. If you use an LXC, it must be **privileged** with
-  nesting + keyctl enabled, or Docker won't run.)
-- Give it a static LAN IP (e.g. `192.168.1.30`).
-- Install:
+## 1. Stand up Coolify in an LXC (once)
+A **privileged Debian 12 LXC** is the lightest way to run Coolify on Proxmox
+(less overhead than a VM). Docker-in-LXC needs a couple of toggles.
+
+Create the container:
+- Template **Debian 12**, **2 vCPU**, **2–4 GB RAM**, **~16 GB disk**, static LAN
+  IP (e.g. `192.168.1.30`).
+- **Uncheck "Unprivileged container"** (Docker is far simpler in a privileged
+  LXC).
+- After creating, on the **Proxmox host** enable nesting + keyctl (Docker won't
+  start without them):
+  ```bash
+  # CTID is your container's id, e.g. 130
+  echo -e "features: nesting=1,keyctl=1" >> /etc/pve/lxc/<CTID>.conf
+  pct reboot <CTID>
+  ```
+- Inside the container, install Docker + Coolify:
   ```bash
   curl -fsSL https://cdn.coollabs.io/coolify/install.sh | sudo bash
   ```
-- Open `http://192.168.1.30:8000`, create the admin account. **Do not expose
-  port 8000 to the internet** — manage Coolify over the LAN only (or behind
-  Cloudflare Access).
+- Open `http://192.168.1.30:8000`, create the admin account. **Keep port 8000
+  LAN-only** — never expose it (or put it behind Cloudflare Access).
+
+> **Why ~16 GB, not 30:** the OS + Coolify + Docker need only a few GB. The space
+> goes to Docker's build cache and the **old app images Coolify keeps after each
+> deploy**. 16 GB is comfortable headroom; run `docker image prune -f` (or set
+> Coolify's cleanup) occasionally and you could live in ~10 GB. An LXC disk is
+> trivial to grow later (`pct resize <CTID> rootfs +8G`), so start small.
 
 ---
 

@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Clock,
   Eye,
   History,
   KeyRound,
@@ -56,6 +57,9 @@ type Item =
   | { kind: 'proposal'; card: ProposalCard; state: ProposalState; result?: string }
   // Agent-mode inline action (auto-run, or Run/Skip via /decide).
   | { kind: 'action'; id: string; title: string; status: ActionStatus; critical?: boolean; detail?: string; request?: string }
+  // A countdown the model set before waiting; ticks client-side and auto-resumes
+  // the assistant when it elapses, unless the operator pauses it.
+  | { kind: 'timer'; id: string; label: string; endsAt: number; status: 'running' | 'done' | 'stopped' }
   | { kind: 'error'; text: string };
 
 interface StoredChat {
@@ -131,6 +135,16 @@ function sanitizeItems(raw: unknown): Item[] {
         detail: stale ? 'Interrupted.' : it.detail,
         request: it.request,
       });
+    } else if (it.kind === 'timer' && typeof it.id === 'string') {
+      // A timer that was still counting when we left never gets to auto-resume
+      // on reload (that would fire stale resumes) — settle it as stopped.
+      out.push({
+        kind: 'timer',
+        id: it.id,
+        label: typeof it.label === 'string' ? it.label : 'waiting',
+        endsAt: typeof it.endsAt === 'number' ? it.endsAt : Date.now(),
+        status: it.status === 'done' ? 'done' : 'stopped',
+      });
     }
   }
   return out.slice(-MAX_ITEMS);
@@ -202,6 +216,11 @@ function buildHistory(items: Item[]): ChatTurn[] {
       raw.push({ role: 'assistant', content: parts.join(' ') + ']' });
     } else if (it.kind === 'tool') {
       raw.push({ role: 'assistant', content: `[used: ${it.label}]` });
+    } else if (it.kind === 'timer' && it.status !== 'running') {
+      raw.push({
+        role: 'assistant',
+        content: `[waited for: ${it.label}${it.status === 'stopped' ? ' — paused by operator' : ''}]`,
+      });
     }
   }
   const merged: ChatTurn[] = [];
@@ -839,6 +858,14 @@ export function AssistantSidebar({
               };
               if (idx >= 0) next[idx] = row;
               else next.push(row);
+            } else if (e.type === 'timer') {
+              next.push({
+                kind: 'timer',
+                id: e.id,
+                label: e.label,
+                endsAt: Date.now() + e.seconds * 1000,
+                status: 'running',
+              });
             } else if (e.type === 'error') {
               next.push({ kind: 'error', text: e.message });
             }
@@ -873,6 +900,26 @@ export function AssistantSidebar({
       }
     },
     [busy, effective, mode, approval, items, compact],
+  );
+
+  // Operator paused a countdown to interject — cancel its auto-resume.
+  const stopTimer = useCallback((id: string) => {
+    setItems((prev) =>
+      prev.map((it) => (it.kind === 'timer' && it.id === id ? { ...it, status: 'stopped' } : it)),
+    );
+  }, []);
+
+  // A countdown reached zero without being paused — mark it done and re-invoke
+  // the assistant to check and continue (the widget guarantees this fires once
+  // and never after a Stop).
+  const onTimerDone = useCallback(
+    (id: string, label: string) => {
+      setItems((prev) =>
+        prev.map((it) => (it.kind === 'timer' && it.id === id ? { ...it, status: 'done' } : it)),
+      );
+      void send(`The "${label}" timer elapsed — continue.`);
+    },
+    [send],
   );
 
   // Resolve an inline (agent-mode) action awaiting Run/Skip.
@@ -1153,6 +1200,8 @@ export function AssistantSidebar({
                   );
                 case 'action':
                   return <ActionCard key={it.id} item={it} onDecide={decide} />;
+                case 'timer':
+                  return <TimerWidget key={it.id} item={it} onStop={stopTimer} onDone={onTimerDone} />;
                 case 'proposal': {
                   const { card, state, result } = it;
                   return (
@@ -1601,6 +1650,57 @@ function ToolGroupChip({ labels }: { labels: string[] }) {
             </span>
           ))}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A live ETA countdown the model set before waiting. Ticks client-side; when it
+ *  hits zero (and wasn't paused) it fires onDone ONCE, which re-invokes the
+ *  assistant to continue. Stop cancels the auto-resume so you can interject. */
+function TimerWidget({
+  item,
+  onStop,
+  onDone,
+}: {
+  item: Extract<Item, { kind: 'timer' }>;
+  onStop: (id: string) => void;
+  onDone: (id: string, label: string) => void;
+}) {
+  const { id, label, endsAt, status } = item;
+  const [remaining, setRemaining] = useState(() => Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)));
+  const firedRef = useRef(false);
+
+  useEffect(() => {
+    if (status !== 'running') return;
+    const tick = () => {
+      const rem = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+      setRemaining(rem);
+      if (rem <= 0 && !firedRef.current) {
+        firedRef.current = true;
+        onDone(id, label);
+      }
+    };
+    tick();
+    const t = window.setInterval(tick, 250);
+    return () => window.clearInterval(t);
+  }, [status, endsAt, id, label, onDone]);
+
+  const mm = Math.floor(remaining / 60);
+  const ss = remaining % 60;
+  const clock = `${mm}:${ss.toString().padStart(2, '0')}`;
+  const stateWord =
+    status === 'running' ? clock : status === 'done' ? 'continued' : 'paused';
+
+  return (
+    <div className={styles.timer} data-status={status}>
+      <Clock size={14} strokeWidth={2.2} aria-hidden className={styles.timerIcon} />
+      <span className={styles.timerLabel}>{label}</span>
+      <span className={`${styles.timerClock} mono`}>{stateWord}</span>
+      {status === 'running' ? (
+        <button type="button" className={styles.timerStop} onClick={() => onStop(id)}>
+          Stop
+        </button>
       ) : null}
     </div>
   );

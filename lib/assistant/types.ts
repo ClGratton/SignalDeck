@@ -43,6 +43,9 @@ export type AssistantEvent =
   | { type: 'confirm'; card: ProposalCard; critical: boolean }
   /** Agent mode: progress of an inline action (auto-run or post-confirm). */
   | { type: 'action'; id: string; title: string; status: ActionStatus; detail?: string; request?: string }
+  /** A countdown the model set before waiting; the client ticks it and
+   *  auto-resumes the assistant when it elapses (unless the operator pauses it). */
+  | { type: 'timer'; id: string; seconds: number; label: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 

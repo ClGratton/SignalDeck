@@ -289,7 +289,13 @@ export function HistoryStrip() {
       title="History"
       area="history"
       meta={
-        <a href="/status" className={styles.historyLink}>
+        <a
+          href="/status"
+          target="_blank"
+          rel="noopener"
+          className={styles.historyLink}
+          title="Opens in a new tab so the console (and any running assistant turn) keeps going"
+        >
           full status page →
         </a>
       }

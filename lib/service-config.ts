@@ -66,18 +66,30 @@ const FIELD_NAMES = new Set(SERVICE_FIELDS.map((f) => f.name));
 const FILE = path.join(process.cwd(), 'data', 'service-config.json');
 
 let overrides: Record<string, string> | null = null;
+let overridesMtime = -1;
 
+// Re-read whenever the file changed (mtime) so a Settings edit takes effect on
+// the very next read — instantly, mid-session, no restart and no waiting for the
+// next chat — even if another module instance or process did the write.
 function readOverrides(): Record<string, string> {
-  if (overrides) return overrides;
+  let mtime = 0;
+  try {
+    mtime = fs.statSync(FILE).mtimeMs;
+  } catch {
+    mtime = 0;
+  }
+  if (overrides && mtime === overridesMtime) return overrides;
+  const next: Record<string, string> = {};
   try {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Record<string, unknown>;
-    overrides = {};
     for (const [k, v] of Object.entries(raw)) {
-      if (FIELD_NAMES.has(k) && typeof v === 'string') overrides[k] = v;
+      if (FIELD_NAMES.has(k) && typeof v === 'string') next[k] = v;
     }
   } catch {
-    overrides = {};
+    /* missing/corrupt — empty overrides */
   }
+  overrides = next;
+  overridesMtime = mtime;
   return overrides;
 }
 
@@ -85,6 +97,11 @@ function writeOverrides(next: Record<string, string>): void {
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(next, null, 2), 'utf8');
   overrides = next;
+  try {
+    overridesMtime = fs.statSync(FILE).mtimeMs;
+  } catch {
+    overridesMtime = -1;
+  }
 }
 
 /** THE read point for every backend credential. Override wins; env is fallback. */

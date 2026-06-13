@@ -165,6 +165,22 @@ const READ_TOOLS: ToolDef[] = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'start_timer',
+    description:
+      'When the task needs to WAIT before the next step — a job/backup to finish, a service to restart and come back, a sync to settle, any "check again in a bit" — ESTIMATE how long (seconds) and call this INSTEAD of looping, sleeping, or guessing. It shows the operator a live countdown and ENDS your turn; you are automatically re-invoked when it elapses to check and continue. The operator can pause it to ask you something. Give a realistic ETA; if it still is not ready when you resume, set another timer. Do not call other tools after this in the same turn.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        seconds: { type: 'integer', description: 'How long to wait, 1–3600 seconds.' },
+        reason: {
+          type: 'string',
+          description: 'Short label shown on the countdown, e.g. "waiting for the gravity update to finish".',
+        },
+      },
+      required: ['seconds', 'reason'],
+    },
+  },
+  {
     name: 'read_reference',
     description:
       'Look up the detailed reference manual (kept out of your always-on context to save tokens). Call before working with a backend you have not used this session, or when unsure. Topics: "apis" (per-service lab_request endpoint cheatsheet), "ssh" (run_shell usage, pct exec etc.), "memory" (how to maintain the lab topology map in global memory).',
@@ -297,6 +313,8 @@ export function toolLabel(name: string): string {
       return 'shell command';
     case 'read_reference':
       return 'read reference';
+    case 'start_timer':
+      return 'set a timer';
     default:
       return name;
   }
@@ -455,6 +473,17 @@ export async function executeTool(
 
     case 'read_reference': {
       return { content: readReference(str(args.topic)) };
+    }
+
+    case 'start_timer': {
+      let secs = int(args.seconds);
+      if (Number.isNaN(secs)) secs = 0;
+      secs = Math.min(Math.max(secs, 1), 3600);
+      const reason = str(args.reason) || 'waiting';
+      ctx.emit({ type: 'timer', id: randomUUID(), seconds: secs, label: reason });
+      return {
+        content: `Timer started: ${secs}s — ${reason}. END YOUR TURN now (no more tool calls). You will be re-invoked automatically when it elapses to continue, unless the operator pauses it to ask something.`,
+      };
     }
 
     case 'run_shell': {
