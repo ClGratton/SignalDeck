@@ -12,6 +12,7 @@
 
 import 'server-only';
 import { labFetch, envBool, trimSlash } from '@/lib/homelab';
+import { openLabSocket, type LabSocket } from '@/lib/ws-rpc';
 import { cfg } from '@/lib/service-config';
 
 const CACHE_TTL_MS = 10_000;
@@ -227,7 +228,7 @@ interface TnPool {
   healthy?: boolean;
 }
 
-function truenasRpcFull(host: string, key: string): Promise<ConsoleTrueNas | null> {
+function truenasRpcFull(host: string, key: string, verifyTls: boolean): Promise<ConsoleTrueNas | null> {
   const wsUrl = host.replace(/^http/i, 'ws').replace(/\/+$/, '') + '/api/current';
   return new Promise((resolve) => {
     const out: ConsoleTrueNas = {
@@ -239,7 +240,7 @@ function truenasRpcFull(host: string, key: string): Promise<ConsoleTrueNas | nul
     };
     let settled = false;
     let pending = 0;
-    let ws: WebSocket;
+    let ws: LabSocket;
     const done = () => {
       if (settled) return;
       settled = true;
@@ -254,7 +255,7 @@ function truenasRpcFull(host: string, key: string): Promise<ConsoleTrueNas | nul
     const timer = setTimeout(done, RPC_TIMEOUT_MS);
 
     try {
-      ws = new WebSocket(wsUrl);
+      ws = openLabSocket(wsUrl, verifyTls);
     } catch {
       return done();
     }
@@ -273,7 +274,7 @@ function truenasRpcFull(host: string, key: string): Promise<ConsoleTrueNas | nul
     });
     ws.addEventListener('error', done);
     ws.addEventListener('close', done);
-    ws.addEventListener('message', (ev: MessageEvent) => {
+    ws.addEventListener('message', (ev: { data: string }) => {
       let msg: { id?: number; result?: unknown };
       try {
         msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
@@ -338,7 +339,7 @@ async function probeTrueNasFull(): Promise<ConsoleTrueNas | null> {
   const host = cfg('TRUENAS_HOST');
   const key = cfg('TRUENAS_API_KEY');
   if (!host || !key) return null;
-  return truenasRpcFull(host, key);
+  return truenasRpcFull(host, key, envBool(cfg('TRUENAS_VERIFY_TLS')));
 }
 
 // ── Jellyfin ─────────────────────────────────────────────────────────────────
@@ -709,11 +710,12 @@ function truenasRpcCall(
   key: string,
   method: string,
   params: unknown[],
+  verifyTls: boolean,
 ): Promise<{ ok: boolean; detail: string }> {
   const wsUrl = host.replace(/^http/i, 'ws').replace(/\/+$/, '') + '/api/current';
   return new Promise((resolve) => {
     let settled = false;
-    let ws: WebSocket;
+    let ws: LabSocket;
     const done = (r: { ok: boolean; detail: string }) => {
       if (settled) return;
       settled = true;
@@ -727,7 +729,7 @@ function truenasRpcCall(
     };
     const timer = setTimeout(() => done({ ok: false, detail: 'TrueNAS RPC timed out.' }), RPC_TIMEOUT_MS);
     try {
-      ws = new WebSocket(wsUrl);
+      ws = openLabSocket(wsUrl, verifyTls);
     } catch {
       return done({ ok: false, detail: 'Could not open the TrueNAS WebSocket.' });
     }
@@ -736,7 +738,7 @@ function truenasRpcCall(
     );
     ws.addEventListener('error', () => done({ ok: false, detail: 'TrueNAS WebSocket error.' }));
     ws.addEventListener('close', () => done({ ok: false, detail: 'TrueNAS closed the connection.' }));
-    ws.addEventListener('message', (ev: MessageEvent) => {
+    ws.addEventListener('message', (ev: { data: string }) => {
       let msg: { id?: number; result?: unknown; error?: { message?: string } };
       try {
         msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
@@ -768,9 +770,10 @@ function haWsCall(
   const token = cfg('HOMEASSISTANT_TOKEN');
   if (!host || !token) return Promise.resolve({ ok: false, detail: 'Home Assistant is not configured.' });
   const wsUrl = trimSlash(host).replace(/^http/i, 'ws') + '/api/websocket';
+  const verifyTls = envBool(cfg('HOMEASSISTANT_VERIFY_TLS'));
   return new Promise((resolve) => {
     let settled = false;
-    let ws: WebSocket;
+    let ws: LabSocket;
     const done = (r: { ok: boolean; detail: string }) => {
       if (settled) return;
       settled = true;
@@ -784,13 +787,13 @@ function haWsCall(
     };
     const timer = setTimeout(() => done({ ok: false, detail: 'Home Assistant WebSocket timed out.' }), RPC_TIMEOUT_MS);
     try {
-      ws = new WebSocket(wsUrl);
+      ws = openLabSocket(wsUrl, verifyTls);
     } catch {
       return done({ ok: false, detail: 'Could not open the Home Assistant WebSocket.' });
     }
     ws.addEventListener('error', () => done({ ok: false, detail: 'Home Assistant WebSocket error.' }));
     ws.addEventListener('close', () => done({ ok: false, detail: 'Home Assistant closed the connection.' }));
-    ws.addEventListener('message', (ev: MessageEvent) => {
+    ws.addEventListener('message', (ev: { data: string }) => {
       let msg: { type?: string; id?: number; success?: boolean; result?: unknown; error?: { message?: string } };
       try {
         msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
@@ -845,7 +848,7 @@ export async function labRequest(
       const key = cfg('TRUENAS_API_KEY');
       if (!host || !key) return { ok: false, detail: 'TrueNAS is not configured.' };
       const params = Array.isArray(body) ? body : body != null ? [body] : [];
-      return truenasRpcCall(host, key, path.trim(), params);
+      return truenasRpcCall(host, key, path.trim(), params, envBool(cfg('TRUENAS_VERIFY_TLS')));
     }
     case 'jellyfin': {
       const host = cfg('JELLYFIN_HOST');

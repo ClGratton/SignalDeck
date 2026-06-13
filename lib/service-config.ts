@@ -40,6 +40,7 @@ export const SERVICE_FIELDS: ServiceField[] = [
   { name: 'HOMEASSISTANT_HOST', label: 'Host URL', group: 'Home Assistant', secret: false },
   { name: 'HOMEASSISTANT_TOKEN', label: 'Long-lived token', group: 'Home Assistant', secret: true, privilegedForActions: true },
   { name: 'HOMEASSISTANT_ENTITIES', label: 'Pinned entities (comma-separated)', group: 'Home Assistant', secret: false },
+  { name: 'HOMEASSISTANT_VERIFY_TLS', label: 'Verify TLS (false for self-signed)', group: 'Home Assistant', secret: false, placeholder: 'true' },
   { name: 'CLOUDFLARE_API_TOKEN', label: 'API token', group: 'Cloudflare', secret: true },
   { name: 'CLOUDFLARE_ZONE_ID', label: 'Zone ID', group: 'Cloudflare', secret: false },
   // SSH gives the assistant shell access for what the REST APIs can't do (exec

@@ -15,6 +15,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { cfg } from '@/lib/service-config';
+import { openLabSocket, type LabSocket } from '@/lib/ws-rpc';
 import type { HealthLevel } from '@/lib/status';
 import type { SystemHealth } from '@/lib/config';
 import { recordSystems } from '@/lib/history-store';
@@ -230,9 +231,9 @@ async function probeProxmox(): Promise<ProxmoxStats | null> {
 // TrueNAS SCALE 25.04 deprecated the REST API and derives access from the linked
 // user's roles; the supported interface is JSON-RPC 2.0 over a WebSocket at
 // wss://<host>/api/current. We log in with the API key, then read pool capacity +
-// uptime — which a least-privilege "Readonly Admin" key can do here. (The global
-// WebSocket can't skip TLS verification, so a self-signed host needs a real cert;
-// behind Cloudflare it already has one.)
+// uptime — which a least-privilege "Readonly Admin" key can do here. The socket
+// (lib/ws-rpc.ts) honors TRUENAS_VERIFY_TLS, so an internal-IP host with a
+// hostname-only cert works with verification off.
 interface TnPool {
   name?: string;
   size?: number;
@@ -260,12 +261,12 @@ interface TnRaw {
   uptimeSeconds: number | null;
 }
 
-function truenasRpc(host: string, key: string): Promise<TnRaw> {
+function truenasRpc(host: string, key: string, verifyTls: boolean): Promise<TnRaw> {
   const wsUrl = host.replace(/^http/i, 'ws').replace(/\/+$/, '') + '/api/current';
   return new Promise<TnRaw>((resolve) => {
     const out: TnRaw = { reachable: false, authOk: false, pools: null, uptimeSeconds: null };
     let settled = false;
-    let ws: WebSocket;
+    let ws: LabSocket;
     let gotPools = false;
     let gotInfo = false;
     const done = () => {
@@ -282,7 +283,7 @@ function truenasRpc(host: string, key: string): Promise<TnRaw> {
     const timer = setTimeout(done, TIMEOUT_MS);
 
     try {
-      ws = new WebSocket(wsUrl);
+      ws = openLabSocket(wsUrl, verifyTls);
     } catch {
       return done();
     }
@@ -299,7 +300,7 @@ function truenasRpc(host: string, key: string): Promise<TnRaw> {
     });
     ws.addEventListener('error', done);
     ws.addEventListener('close', done);
-    ws.addEventListener('message', (ev: MessageEvent) => {
+    ws.addEventListener('message', (ev: { data: string }) => {
       let msg: { id?: number; result?: unknown };
       try {
         msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
@@ -342,7 +343,7 @@ async function probeTrueNas(): Promise<TrueNasResult> {
     return { reachable: false, poolsHealthy: true, storage: null, uptimeSeconds: null };
   }
 
-  const raw = await truenasRpc(host, key);
+  const raw = await truenasRpc(host, key, envBool(cfg('TRUENAS_VERIFY_TLS')));
   const held =
     lastGoodTrueNas && Date.now() - lastGoodTrueNas.at < TRUENAS_HOLD_MS
       ? lastGoodTrueNas.value
