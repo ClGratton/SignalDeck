@@ -321,6 +321,12 @@ export function AssistantSidebar({
   const [workspace, setWorkspace] = useState<ChatWorkspaceDto | null>(null);
   const [planOpen, setPlanOpen] = useState(true);
 
+  // Timer turn-state: while a timer runs the composer is locked (the turn is
+  // "busy waiting"). The Stop button opens a keep-or-delete prompt; choosing
+  // "keep & talk" sets `interjecting` so you can message the agent mid-wait.
+  const [interjecting, setInterjecting] = useState(false);
+  const [timerPrompt, setTimerPrompt] = useState<string | null>(null);
+
   // Outcomes of confirmed actions, fed to the model with the next message so it
   // knows what actually ran.
   const contextNotes = useRef<string[]>([]);
@@ -590,6 +596,20 @@ export function AssistantSidebar({
     const pct = Math.min(100, Math.round((used / window) * 100));
     return { used, window, pct, level: pct >= 85 ? 'down' : pct >= 60 ? 'warn' : 'ok' };
   }, [items, effective]);
+
+  // The id of the timer currently counting down (locks the composer), if any.
+  const runningTimerId = useMemo(() => {
+    const t = items.find((it) => it.kind === 'timer' && it.status === 'running');
+    return t && t.kind === 'timer' ? t.id : null;
+  }, [items]);
+  // When the timer is gone (fired or deleted) drop the interjection + prompt.
+  useEffect(() => {
+    if (!runningTimerId) {
+      setInterjecting(false);
+      setTimerPrompt(null);
+    }
+  }, [runningTimerId]);
+  const timerLocks = !!runningTimerId && !interjecting; // composer locked, button = Stop
 
   const choose = (provider: AssistantProvider, model: string) => {
     const next = { provider, model };
@@ -1412,7 +1432,9 @@ export function AssistantSidebar({
                 case 'action':
                   return <ActionCard key={it.id} item={it} onDecide={decide} />;
                 case 'timer':
-                  return <TimerWidget key={it.id} item={it} onStop={stopTimer} onDone={onTimerDone} />;
+                  return (
+                    <TimerWidget key={it.id} item={it} onStop={(id) => setTimerPrompt(id)} onDone={onTimerDone} />
+                  );
                 case 'proposal': {
                   const { card, state, result } = it;
                   return (
@@ -1709,27 +1731,28 @@ export function AssistantSidebar({
             <ChevronUp size={13} strokeWidth={2.2} aria-hidden data-flip={modeMenuOpen || undefined} />
           </button>
           {effective ? (
-            <div
-              className={styles.ctxWheel}
+            <span
+              className={styles.ctxPill}
               data-level={ctx.level}
-              title={`Context: ${ctx.pct}% used (~${ctx.used.toLocaleString()} of ${ctx.window.toLocaleString()} tokens). /compact to shrink.`}
+              data-tip={`${ctx.pct}% of context · ~${ctx.used.toLocaleString()} / ${ctx.window.toLocaleString()} tokens · /compact to shrink`}
               aria-label={`Context ${ctx.pct} percent used`}
             >
-              <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden>
-                <circle cx="10" cy="10" r="7" fill="none" stroke="var(--border-strong)" strokeWidth="3" opacity="0.4" />
+              <svg className={styles.ctxRing} viewBox="0 0 20 20" width="13" height="13" aria-hidden>
+                <circle cx="10" cy="10" r="7" fill="none" stroke="var(--border-strong)" strokeWidth="3.2" opacity="0.4" />
                 <circle
                   cx="10"
                   cy="10"
                   r="7"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="3"
+                  strokeWidth="3.2"
                   strokeLinecap="round"
                   strokeDasharray={`${((ctx.pct / 100) * 43.98).toFixed(2)} 43.98`}
                   transform="rotate(-90 10 10)"
                 />
               </svg>
-            </div>
+              <span className={`${styles.ctxPct} mono tnum`}>{ctx.pct}%</span>
+            </span>
           ) : null}
         </div>
 
@@ -1758,6 +1781,37 @@ export function AssistantSidebar({
             })()
           : null}
 
+        {timerPrompt ? (
+          <div className={styles.timerPrompt} role="dialog" aria-label="Timer running">
+            <span className={styles.timerPromptText}>
+              Timer running. Keep it and talk to the agent, or delete it?
+            </span>
+            <div className={styles.timerPromptBtns}>
+              <button
+                type="button"
+                className={styles.timerKeep}
+                onClick={() => {
+                  setInterjecting(true);
+                  setTimerPrompt(null);
+                  requestAnimationFrame(() => inputRef.current?.focus());
+                }}
+              >
+                Keep &amp; talk
+              </button>
+              <button
+                type="button"
+                className={styles.timerDelete}
+                onClick={() => {
+                  stopTimer(timerPrompt);
+                  setTimerPrompt(null);
+                }}
+              >
+                Delete timer
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <form
           className={styles.composer}
           onSubmit={(e) => {
@@ -1776,18 +1830,27 @@ export function AssistantSidebar({
                 void send(input);
               }
             }}
-            placeholder={effective ? 'Ask the lab…' : 'Add an API key first'}
+            placeholder={
+              !effective
+                ? 'Add an API key first'
+                : timerLocks
+                  ? 'Timer running — press Stop to talk or cancel'
+                  : 'Ask the lab…'
+            }
             rows={1}
-            disabled={!effective}
+            disabled={!effective || timerLocks}
             aria-label="Message the assistant"
           />
-          {busy ? (
+          {busy || timerLocks ? (
             <button
               type="button"
               className={`${styles.sendBtn} ${styles.stopBtn}`}
-              onClick={stop}
-              aria-label="Stop"
-              title="Stop"
+              onClick={() => {
+                if (busy) stop();
+                else if (runningTimerId) setTimerPrompt(runningTimerId);
+              }}
+              aria-label={busy ? 'Stop' : 'Interrupt timer'}
+              title={busy ? 'Stop' : 'Interrupt the timer'}
             >
               <Square size={13} strokeWidth={2.6} aria-hidden fill="currentColor" />
             </button>

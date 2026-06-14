@@ -718,21 +718,70 @@
   font-weight: 600;
 }
 
-/* Context-usage wheel: a small donut at the right of the chip row. Colour rises
-   with fill (ok → warn → down) and the native title gives the exact numbers. */
-.ctxWheel {
+/* Context-usage pill: a donut + percent at the right of the chip row, styled
+   like the model/mode chips for coherence. The donut takes its colour from the
+   fill level (ok → warn → down); a custom tooltip (no native title) shows the
+   exact numbers on hover. */
+.ctxPill {
+  position: relative;
   margin-left: auto;
   flex: 0 0 auto;
-  display: inline-grid;
-  place-items: center;
-  color: var(--ok);
-  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ok); /* the donut's currentColor */
+  cursor: default;
 }
-.ctxWheel[data-level='warn'] {
+.ctxPill[data-level='warn'] {
   color: var(--warn);
 }
-.ctxWheel[data-level='down'] {
+.ctxPill[data-level='down'] {
   color: var(--down);
+}
+.ctxRing {
+  flex: none;
+}
+.ctxPct {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+/* Custom tooltip — replaces the browser's native title. */
+.ctxPill::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  right: 0;
+  white-space: nowrap;
+  padding: 0.32rem 0.55rem;
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+  transition:
+    opacity var(--dur) var(--ease-out-quart),
+    transform var(--dur) var(--ease-out-quart);
+}
+.ctxPill:hover::after,
+.ctxPill:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ctxPill::after {
+    transition: opacity var(--dur-fast, 0.1s) linear;
+    transform: none;
+  }
 }
 
 /* Skill (slash-command) hint shown above the composer while typing "/". */
@@ -771,6 +820,53 @@
   font-size: var(--text-xs);
   color: var(--muted);
   min-width: 0;
+}
+
+/* Keep-or-delete prompt shown above the composer when you Stop a running timer. */
+.timerPrompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.5rem 0.65rem 0;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.timerPromptText {
+  font-size: var(--text-xs);
+  color: var(--ink);
+}
+.timerPromptBtns {
+  display: flex;
+  gap: 0.4rem;
+}
+.timerKeep,
+.timerDelete {
+  flex: 1;
+  padding: 0.32rem 0.5rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+.timerKeep {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.timerKeep:hover {
+  filter: brightness(1.05);
+}
+.timerDelete {
+  color: var(--down-ink);
+  background: color-mix(in oklch, var(--down) 12%, var(--surface));
+  border-color: color-mix(in oklch, var(--down) 35%, var(--border));
+}
+.timerDelete:hover {
+  background: color-mix(in oklch, var(--down) 20%, var(--surface));
 }
 /* The mode popover anchors to the mode chip on the right. */
 .modePop {
