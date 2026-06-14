@@ -704,6 +704,27 @@ export const LAB_SERVICES: LabService[] = [
   'cloudflare',
 ];
 
+// TrueNAS middleware puts the GENERIC text in `message` ("Method call error")
+// and the ACTUAL cause in `data` — reason, errname, and (for validation errors)
+// an `extra` list of [field, message, errno]. Surface all of it so the model can
+// self-correct instead of retrying blind. The traceback is intentionally dropped.
+interface TnRpcError {
+  code?: number;
+  message?: string;
+  data?: { errname?: string; reason?: string; extra?: unknown };
+}
+function tnErrorDetail(error: TnRpcError): string {
+  const d = error.data;
+  const parts: string[] = [];
+  if (typeof error.code === 'number') parts.push(`code ${error.code}`);
+  if (error.message) parts.push(error.message);
+  if (d?.errname && !error.message?.includes(d.errname)) parts.push(d.errname);
+  if (d?.reason && d.reason !== error.message) parts.push(d.reason);
+  if (d?.extra != null) parts.push(`details: ${clip(JSON.stringify(d.extra), 800)}`);
+  const detail = parts.filter(Boolean).join(' — ');
+  return `TrueNAS error: ${detail || clip(JSON.stringify(error), 1500)}`;
+}
+
 /** One TrueNAS JSON-RPC call over the WebSocket (it has no REST on SCALE 25.04). */
 function truenasRpcCall(
   host: string,
@@ -739,17 +760,18 @@ function truenasRpcCall(
     ws.addEventListener('error', () => done({ ok: false, detail: 'TrueNAS WebSocket error.' }));
     ws.addEventListener('close', () => done({ ok: false, detail: 'TrueNAS closed the connection.' }));
     ws.addEventListener('message', (ev: { data: string }) => {
-      let msg: { id?: number; result?: unknown; error?: { message?: string } };
+      let msg: { id?: number; result?: unknown; error?: TnRpcError };
       try {
         msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
       } catch {
         return;
       }
       if (msg.id === 1) {
+        if (msg.error) return done({ ok: false, detail: tnErrorDetail(msg.error) });
         if (msg.result !== true) return done({ ok: false, detail: 'TrueNAS rejected the API key.' });
         ws.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method, params }));
       } else if (msg.id === 2) {
-        if (msg.error) return done({ ok: false, detail: `TrueNAS: ${msg.error.message ?? 'error'}` });
+        if (msg.error) return done({ ok: false, detail: tnErrorDetail(msg.error) });
         cache = null;
         done({ ok: true, detail: `${method} → ${clip(JSON.stringify(msg.result ?? null))}` });
       }
