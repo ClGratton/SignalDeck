@@ -83,6 +83,24 @@ const APPROVAL_KEY = 'grtlabs:assistant-approval';
 const LEGACY_ACTIONS_KEY = 'grtlabs:assistant-actions';
 const MAX_CHATS = 30;
 const MAX_ITEMS = 300;
+// Default target for /compact when no percentage is given.
+const DEFAULT_COMPACT_PCT = 25;
+
+// Approximate context window (tokens) per provider/model — drives the usage
+// wheel only, so a coarse map is fine. Falls back to a conservative 128k.
+function contextWindowFor(provider: AssistantProvider, model: string): number {
+  const m = (model || '').toLowerCase();
+  switch (provider) {
+    case 'anthropic':
+      return 200_000;
+    case 'gemini':
+      return 1_000_000;
+    case 'openai':
+      return m.includes('gpt-4.1') || m.startsWith('o1') || m.startsWith('o3') ? 200_000 : 128_000;
+    default:
+      return 128_000; // deepseek, glm, and unknowns
+  }
+}
 
 const APPROVALS: { id: ApprovalLevel; label: string; hint: string }[] = [
   { id: 'all', label: 'Confirm all', hint: 'Every action waits for your one-click yes.' },
@@ -560,6 +578,19 @@ export function AssistantSidebar({
     return found?.label ?? (effective.model || effective.provider);
   }, [catalog, effective]);
 
+  // Rough context-usage estimate for the wheel: ~4 chars/token over the
+  // transcript + a fixed prompt/tools overhead, against the model's window.
+  const ctx = useMemo(() => {
+    const chars = items.reduce(
+      (n, it) => n + ('text' in it ? it.text.length : 'label' in it ? it.label.length : 0),
+      0,
+    );
+    const used = Math.ceil(chars / 4) + 1800;
+    const window = effective ? contextWindowFor(effective.provider, effective.model) : 128_000;
+    const pct = Math.min(100, Math.round((used / window) * 100));
+    return { used, window, pct, level: pct >= 85 ? 'down' : pct >= 60 ? 'warn' : 'ok' };
+  }, [items, effective]);
+
   const choose = (provider: AssistantProvider, model: string) => {
     const next = { provider, model };
     setPick(next);
@@ -766,13 +797,22 @@ export function AssistantSidebar({
   // so the re-sent context (and its token cost) shrinks, while the model keeps
   // the task, discovered facts, and what ran. Reuses the normal endpoint in Ask
   // mode (no actions) so there's no separate per-provider summarizer.
-  const compact = useCallback(async () => {
+  const compact = useCallback(async (targetPct?: number) => {
     if (busy || !effective || items.length === 0) return;
     setInput('');
     setBusy(true);
-    setItems((prev) => [...prev, { kind: 'tool', label: 'compacting context…' }]);
+    // Target a share of the current transcript size. `/compact 10` → ~10%;
+    // bare `/compact` → DEFAULT_COMPACT_PCT. Clamped to a sane band.
+    const pct = Math.min(Math.max(targetPct ?? DEFAULT_COMPACT_PCT, 5), 90);
+    const curChars = items.reduce(
+      (n, it) => n + ('text' in it ? it.text.length : 'label' in it ? it.label.length : 0),
+      0,
+    );
+    const targetChars = Math.max(200, Math.round((curChars * pct) / 100));
+    setItems((prev) => [...prev, { kind: 'tool', label: `compacting context → ~${pct}%…` }]);
     const instruction =
-      'Compact our conversation into a tight running brief I can continue from. Cover: the goal/task, the key facts you discovered (vmids, nodes, entity ids, IPs, results), which actions ran and their outcomes, and what is still left to do. Short factual bullets. Output ONLY the brief — do not call any tools.';
+      `Compact our conversation into a tight running brief I can continue from, targeting roughly ${pct}% of its current length (about ${targetChars} characters — be more aggressive the smaller that is). ` +
+      'Cover: the goal/task, the key facts you discovered (vmids, nodes, entity ids, IPs, results), which actions ran and their outcomes, and what is still left to do. Short factual bullets. Output ONLY the brief — do not call any tools.';
     const controller = new AbortController();
     abortRef.current = controller;
     let summary = '';
@@ -791,7 +831,7 @@ export function AssistantSidebar({
       });
       if (res.status === 401) {
         setSessionExpired(true);
-        setItems((prev) => prev.filter((it) => it.kind !== 'tool' || it.label !== 'compacting context…'));
+        setItems((prev) => prev.filter((it) => it.kind !== 'tool' || !it.label.startsWith('compacting context')));
         return;
       }
       if (res.ok && res.body) {
@@ -831,13 +871,36 @@ export function AssistantSidebar({
     }
   }, [busy, effective, items, approval, scrollToBottom]);
 
+  // ── Skills: slash commands handled client-side. A tiny registry so adding a
+  // new one is a single entry; `arg` is everything typed after the name. ──
+  const SKILLS = useMemo(
+    () => [
+      {
+        name: 'compact',
+        usage: '/compact [%]',
+        summary: 'Summarize the chat to shrink context. Optional target: /compact 10 → ~10%.',
+        run: (arg: string) => {
+          const n = parseInt(arg, 10);
+          void compact(Number.isFinite(n) ? n : undefined);
+        },
+      },
+    ],
+    [compact],
+  );
+
   const send = useCallback(
     async (raw: string) => {
       const text = raw.trim();
       if (!text || busy || !effective) return;
-      if (text === '/compact') {
-        void compact();
-        return;
+      if (text.startsWith('/')) {
+        const sp = text.indexOf(' ');
+        const name = (sp === -1 ? text.slice(1) : text.slice(1, sp)).toLowerCase();
+        const skill = SKILLS.find((s) => s.name === name);
+        if (skill) {
+          skill.run(sp === -1 ? '' : text.slice(sp + 1).trim());
+          return;
+        }
+        // unknown /command → fall through and send it as a normal message
       }
       setInput('');
       setBusy(true);
@@ -986,7 +1049,7 @@ export function AssistantSidebar({
         requestAnimationFrame(() => inputRef.current?.focus());
       }
     },
-    [busy, effective, mode, approval, items, compact],
+    [busy, effective, mode, approval, items, compact, SKILLS],
   );
 
   // Operator paused a countdown to interject — cancel its auto-resume.
@@ -1645,7 +1708,55 @@ export function AssistantSidebar({
             {mode === 'agent' ? <span className={`${styles.modeTag} mono`}>{approval}</span> : null}
             <ChevronUp size={13} strokeWidth={2.2} aria-hidden data-flip={modeMenuOpen || undefined} />
           </button>
+          {effective ? (
+            <div
+              className={styles.ctxWheel}
+              data-level={ctx.level}
+              title={`Context: ${ctx.pct}% used (~${ctx.used.toLocaleString()} of ${ctx.window.toLocaleString()} tokens). /compact to shrink.`}
+              aria-label={`Context ${ctx.pct} percent used`}
+            >
+              <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden>
+                <circle cx="10" cy="10" r="7" fill="none" stroke="var(--border-strong)" strokeWidth="3" opacity="0.4" />
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="7"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeDasharray={`${((ctx.pct / 100) * 43.98).toFixed(2)} 43.98`}
+                  transform="rotate(-90 10 10)"
+                />
+              </svg>
+            </div>
+          ) : null}
         </div>
+
+        {input.startsWith('/') && !busy
+          ? (() => {
+              const q = input.slice(1).split(' ')[0].toLowerCase();
+              const matches = SKILLS.filter((s) => s.name.startsWith(q));
+              return matches.length > 0 ? (
+                <div className={styles.skillHint} role="listbox" aria-label="Skills">
+                  {matches.map((s) => (
+                    <button
+                      key={s.name}
+                      type="button"
+                      className={styles.skillRow}
+                      onClick={() => {
+                        setInput('/' + s.name + ' ');
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      <span className={`${styles.skillName} mono`}>{s.usage}</span>
+                      <span className={styles.skillDesc}>{s.summary}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null;
+            })()
+          : null}
 
         <form
           className={styles.composer}

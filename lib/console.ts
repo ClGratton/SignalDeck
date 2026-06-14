@@ -13,7 +13,7 @@
 import 'server-only';
 import { labFetch, envBool, trimSlash } from '@/lib/homelab';
 import { openLabSocket, type LabSocket } from '@/lib/ws-rpc';
-import { cfg } from '@/lib/service-config';
+import { cfg, cfgAgent } from '@/lib/service-config';
 
 const CACHE_TTL_MS = 10_000;
 // TrueNAS answers four RPC queries per cycle; a busy middleware occasionally
@@ -137,10 +137,13 @@ function clip(s: string, n = 4000): string {
 }
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-function pveAuth() {
+// `scope` selects the credential: 'read' = the dashboard's least-privilege token
+// (snapshot/display), 'agent' = the elevated write token (agent action path).
+function pveAuth(scope: 'read' | 'agent' = 'read') {
+  const pick = scope === 'agent' ? cfgAgent : cfg;
   const host = cfg('PROXMOX_HOST');
-  const tokenId = cfg('PROXMOX_TOKEN_ID');
-  const secret = cfg('PROXMOX_TOKEN_SECRET');
+  const tokenId = pick('PROXMOX_TOKEN_ID');
+  const secret = pick('PROXMOX_TOKEN_SECRET');
   if (!host || !tokenId || !secret) return null;
   return {
     base: trimSlash(host),
@@ -395,9 +398,9 @@ export interface HaState {
   attributes?: { friendly_name?: string; unit_of_measurement?: string; device_class?: string };
 }
 
-function haAuth() {
+function haAuth(scope: 'read' | 'agent' = 'read') {
   const host = cfg('HOMEASSISTANT_HOST');
-  const token = cfg('HOMEASSISTANT_TOKEN');
+  const token = (scope === 'agent' ? cfgAgent : cfg)('HOMEASSISTANT_TOKEN');
   if (!host || !token) return null;
   return { base: trimSlash(host), headers: { Authorization: `Bearer ${token}` } };
 }
@@ -571,7 +574,7 @@ export async function proxmoxGuestPower(
   vmid: number,
   action: GuestPowerAction,
 ): Promise<{ ok: boolean; detail: string }> {
-  const auth = pveAuth();
+  const auth = pveAuth('agent');
   if (!auth) return { ok: false, detail: 'Proxmox is not configured.' };
   if (!/^[a-zA-Z0-9.-]+$/.test(node) || !Number.isInteger(vmid)) {
     return { ok: false, detail: 'Invalid node or vmid.' };
@@ -596,7 +599,7 @@ export async function proxmoxRequest(
   rawPath: string,
   body?: Record<string, unknown>,
 ): Promise<{ ok: boolean; detail: string }> {
-  const auth = pveAuth();
+  const auth = pveAuth('agent');
   if (!auth) return { ok: false, detail: 'Proxmox is not configured.' };
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     return { ok: false, detail: `Unsupported method ${method}.` };
@@ -642,7 +645,7 @@ export async function haRequest(
   rawPath: string,
   body?: unknown,
 ): Promise<{ ok: boolean; detail: string }> {
-  const auth = haAuth();
+  const auth = haAuth('agent');
   if (!auth) return { ok: false, detail: 'Home Assistant is not configured.' };
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     return { ok: false, detail: `Unsupported method ${method}.` };
@@ -674,7 +677,7 @@ export async function haCallService(
   service: string,
   entityId: string,
 ): Promise<{ ok: boolean; detail: string }> {
-  const auth = haAuth();
+  const auth = haAuth('agent');
   if (!auth) return { ok: false, detail: 'Home Assistant is not configured.' };
   if (!/^[a-z_]+$/.test(domain) || !/^[a-z_]+$/.test(service) || !/^[\w.]+$/.test(entityId)) {
     return { ok: false, detail: 'Invalid service call.' };
@@ -789,7 +792,7 @@ function haWsCall(
   payload: Record<string, unknown>,
 ): Promise<{ ok: boolean; detail: string }> {
   const host = cfg('HOMEASSISTANT_HOST');
-  const token = cfg('HOMEASSISTANT_TOKEN');
+  const token = cfgAgent('HOMEASSISTANT_TOKEN');
   if (!host || !token) return Promise.resolve({ ok: false, detail: 'Home Assistant is not configured.' });
   const wsUrl = trimSlash(host).replace(/^http/i, 'ws') + '/api/websocket';
   const verifyTls = envBool(cfg('HOMEASSISTANT_VERIFY_TLS'));
@@ -867,7 +870,7 @@ export async function labRequest(
     }
     case 'truenas': {
       const host = cfg('TRUENAS_HOST');
-      const key = cfg('TRUENAS_API_KEY');
+      const key = cfgAgent('TRUENAS_API_KEY');
       if (!host || !key) return { ok: false, detail: 'TrueNAS is not configured.' };
       const params = Array.isArray(body) ? body : body != null ? [body] : [];
       return truenasRpcCall(host, key, path.trim(), params, envBool(cfg('TRUENAS_VERIFY_TLS')));

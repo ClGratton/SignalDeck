@@ -196,7 +196,8 @@ export function TelemetryCanvas() {
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // A soft background doesn't need 2× — cap lower to cut the pixel/blur work.
+      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       width = Math.max(1, rect.width);
       height = Math.max(1, rect.height);
       canvas.width = Math.round(width * dpr);
@@ -326,15 +327,19 @@ export function TelemetryCanvas() {
           ctx.stroke();
         }
 
-        // Glowing head.
-        ctx.save();
-        ctx.fillStyle = rgb(col, fade);
-        ctx.shadowColor = rgb(col, 0.9);
-        ctx.shadowBlur = palette.glow > 0 ? 10 : 5;
+        // Head: a faint halo disc + a bright core. This fakes the glow WITHOUT
+        // ctx.shadowBlur, which is a per-draw Gaussian blur — doing it for every
+        // packet each frame was the canvas's biggest GPU cost.
+        const hx = pk.p * width;
+        const hy = yAt(pk.lane, pk.p);
+        ctx.fillStyle = rgb(col, fade * (palette.glow > 0 ? 0.26 : 0.18));
         ctx.beginPath();
-        ctx.arc(pk.p * width, yAt(pk.lane, pk.p), pk.size, 0, Math.PI * 2);
+        ctx.arc(hx, hy, pk.size * 2.4, 0, Math.PI * 2);
         ctx.fill();
-        ctx.restore();
+        ctx.fillStyle = rgb(col, fade);
+        ctx.beginPath();
+        ctx.arc(hx, hy, pk.size, 0, Math.PI * 2);
+        ctx.fill();
       }
     };
 
@@ -350,7 +355,13 @@ export function TelemetryCanvas() {
     };
 
     let raf = 0;
+    // Cap the render rate. A slow ambient scene doesn't need 60fps, and on a
+    // 120/144Hz display the uncapped loop did 2–2.4× the work for no visible gain
+    // — that, plus per-packet shadowBlur, is what cooked the GPU.
+    const FRAME_MS = 1000 / 30;
     const loop = (now: number) => {
+      raf = requestAnimationFrame(loop);
+      if (lastNow !== 0 && now - lastNow < FRAME_MS) return;
       const dt = lastNow === 0 ? 0 : Math.min(0.05, (now - lastNow) / 1000);
       lastNow = now;
 
@@ -382,7 +393,6 @@ export function TelemetryCanvas() {
       // Advance the phase clock; turbulence speeds the ADVANCE, never the phase.
       driftRef.current += dt * (1 + (tuning.turb - 1) * 0.4);
       render(driftRef.current, introScale);
-      raf = requestAnimationFrame(loop);
     };
 
     if (reduceMotion) {

@@ -24,6 +24,43 @@ the owner explicitly asking. When adding features, re-read this list.
   hostnames deliberately made public. No IPs, paths, tokens, VM names, or
   internal topology. Anything richer belongs behind the session check.
 
+### Credential privilege split — dashboard (read) vs agent (write)
+
+The backend tokens come in two tiers, chosen per CODE PATH (not per file):
+
+- The **read/display path** (snapshot, public aggregates, panels) uses the base
+  keys (`PROXMOX_TOKEN_ID/SECRET`, `TRUENAS_API_KEY`, `HOMEASSISTANT_TOKEN`).
+  Keep these LEAST-PRIVILEGE (read-only roles) — they're the internet-adjacent
+  surface.
+- The **agent action path** (`lab_request` / `guest_power` / `ha_service` /
+  `run_shell` in `lib/console.ts`) reads the ELEVATED `*_AGENT` variants via
+  `cfgAgent()` (`lib/service-config.ts`), falling back to the base key when the
+  `*_AGENT` is unset. Set these to a write-capable token so the agent can manage
+  the lab. The auth builders are scoped: `pveAuth('read'|'agent')`,
+  `haAuth('read'|'agent')`; TrueNAS-RPC / HA-WebSocket / SSH agent calls use
+  `cfgAgent`. SSH is agent-only already; Jellyfin/Cloudflare stay single-key.
+
+Both tiers live in the same gitignored store — co-location is fine; the
+separation that matters is that a bug in the read path can never reach the write
+token. NEVER hand the read/display path the elevated key.
+
+### Network safety — keep the elevated token usable only from the LAN
+
+The dashboard holds the write token and runs INSIDE the LAN. Its real-time lock
+is the login (password + TOTP + throttle, single-use TOTP) plus — planned, see
+below — a re-auth elevation window for destructive agent actions. Layered, no
+VPN required:
+
+- **Firewall the backend API ports** (Proxmox `8006`, TrueNAS `443`) to the
+  dashboard's IP + your admin machines, so a leaked token is useless from outside
+  the LAN. This is the highest-leverage control.
+- The dashboard reaches backends by INTERNAL IP (`*_HOST` = LAN IP,
+  `*_VERIFY_TLS=false`); the public `pve`/`nas` hostnames are Cloudflare-Access-
+  gated and need not be reachable by the dashboard at all.
+- **Planned (next):** destructive agent actions (a small blacklist —
+  destroy/delete/wipe/format) require a fresh re-auth that opens a ~30-minute
+  elevation window, so a batch of risky ops runs without re-prompting each one.
+
 ### Login (`app/login/actions.ts`) — properties that must hold
 
 1. **Throttle first**: `checkThrottle()` runs before any credential work

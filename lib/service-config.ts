@@ -19,7 +19,15 @@ import path from 'node:path';
 export interface ServiceField {
   name: string; // the env-var name
   label: string;
-  group: 'Proxmox' | 'TrueNAS' | 'Jellyfin' | 'Home Assistant' | 'Cloudflare' | 'Shell (SSH)' | 'Assistant';
+  group:
+    | 'Proxmox'
+    | 'TrueNAS'
+    | 'Jellyfin'
+    | 'Home Assistant'
+    | 'Cloudflare'
+    | 'Shell (SSH)'
+    | 'Assistant'
+    | 'Agent credentials';
   secret: boolean; // masked in the UI; revealed only after re-auth
   placeholder?: string;
   /** True for the credentials the assistant needs ELEVATED to ACT (see CREDENTIALS.md). */
@@ -61,6 +69,15 @@ export const SERVICE_FIELDS: ServiceField[] = [
   // Seconds to wait on a single backend REST call before giving up (so a dead
   // service returns an error instead of stalling the turn). Default 3.5s.
   { name: 'ASSISTANT_REQUEST_TIMEOUT', label: 'Backend request timeout (seconds, default 3.5)', group: 'Assistant', secret: false, placeholder: '3.5' },
+  // Elevated (write-capable) credentials used ONLY by the agent's action path
+  // (lab_request / guest_power / ha_service / run_shell), so the read-only
+  // dashboard display can keep a least-privilege token. Each falls back to the
+  // matching read key when blank — set these to a full-access token to let the
+  // agent manage the lab. See cfgAgent().
+  { name: 'PROXMOX_TOKEN_ID_AGENT', label: 'Proxmox token ID — write', group: 'Agent credentials', secret: false, placeholder: 'user@pam!agent', privilegedForActions: true },
+  { name: 'PROXMOX_TOKEN_SECRET_AGENT', label: 'Proxmox token secret — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
+  { name: 'TRUENAS_API_KEY_AGENT', label: 'TrueNAS API key — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
+  { name: 'HOMEASSISTANT_TOKEN_AGENT', label: 'Home Assistant token — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
 ];
 
 const FIELD_NAMES = new Set(SERVICE_FIELDS.map((f) => f.name));
@@ -111,6 +128,14 @@ export function cfg(name: string): string | undefined {
   if (o != null && o !== '') return o;
   const e = process.env[name];
   return e != null && e !== '' ? e : undefined;
+}
+
+/** Credential read for the AGENT's WRITE path: prefers the elevated
+ *  `<NAME>_AGENT` value, falling back to the read-only key when it's unset — so
+ *  the dashboard's display can run on a least-privilege token while the agent
+ *  acts with a full-access one. Used only by the action functions in console.ts. */
+export function cfgAgent(name: string): string | undefined {
+  return cfg(`${name}_AGENT`) ?? cfg(name);
 }
 
 export type ConfigSource = 'override' | 'env' | null;
