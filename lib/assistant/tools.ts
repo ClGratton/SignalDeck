@@ -264,7 +264,7 @@ const ACTION_TOOLS: ToolDef[] = [
   {
     name: 'run_shell',
     description:
-      'Run a shell command over SSH on a lab host — for what no REST API can do: exec inside a container (pct exec {vmid} -- ...), read logs (journalctl), inspect files, check services. By default it lands on the configured entry host; in a multi-node cluster set `host` to the node that actually owns the guest (get the node from GET /cluster/resources) so you reach it directly instead of hopping. Always a critical action. Call read_reference("ssh") for the patterns. Keep commands read-only unless the task is to change something.',
+      'Run a shell command over SSH on a lab host — for what no REST API can do: exec inside a container (pct exec {vmid} -- ...), read logs (journalctl), inspect files, check services. By default it lands on the configured entry host; in a multi-node cluster set `host` to the node that actually owns the guest (get the node from GET /cluster/resources) so you reach it directly instead of hopping. Read-only commands auto-run in agent "critical" mode; only commands that delete/overwrite files or stop/destroy/reconfigure a service or guest pause for confirmation. Call read_reference("ssh") for the patterns. Keep commands read-only unless the task is to change something.',
     input_schema: {
       type: 'object',
       properties: {
@@ -328,6 +328,38 @@ const READONLY_RPC = /\.(query|get|info|config|list|read|status|test|validate)$|
 function labRequestCritical(service: LabService, method: string, path: string): boolean {
   if (service === 'truenas') return !READONLY_RPC.test(path.trim());
   return method !== 'GET'; // any write/delete to a REST backend
+}
+
+// run_shell can do anything, so we DENY-LIST the destructive shapes instead of
+// trying to allow-list every safe one. A command confirms in "critical" mode
+// ONLY when it deletes/overwrites files or stops/destroys/reconfigures a service
+// or guest. Plain reads, pipes and inspections (zpool status, zdb, grep, du,
+// journalctl…) auto-run — otherwise "critical" collapses into "confirm every".
+// Errs toward confirming on ambiguous matches; misses are bounded by the deny-list.
+const SHELL_CRITICAL: RegExp[] = [
+  /\b(rm|rmdir|unlink|shred|srm)\b/i, // delete files
+  /\b(dd|mkfs(\.\w+)?|wipefs|mkswap|parted|fdisk|sfdisk|sgdisk)\b/i, // wipe/format disks
+  /\b(mv|cp|chown|chmod|chattr|ln|truncate|tee)\b/i, // move/overwrite/permissions
+  /\bsed\b[^|]*\s-i/i, // in-place edit
+  /-delete\b/i, // find … -delete
+  /(?:^|[\s;&|])\d*>>?\s*(?!&)(?!\/dev\/null\b)["']?[~.\/a-zA-Z0-9_]/, // write/append to a file
+  /\bzpool\s+(destroy|remove|offline|detach|replace|clear|add|create|split|labelclear)\b/i,
+  /\bzfs\s+(destroy|rollback|rename|set|create|receive|recv|promote)\b/i,
+  /\b(qm|pct)\s+(destroy|stop|reset|shutdown|suspend|rollback|set|delete|template|migrate|create)\b/i,
+  /\bsystemctl\s+(stop|restart|disable|mask|kill|reload)\b/i,
+  /\bservice\s+\S+\s+(stop|restart|reload)\b/i,
+  /\b(reboot|shutdown|poweroff|halt|telinit)\b/i,
+  /\b(kill|pkill|killall)\b/i,
+  /\bapt(-get)?\s+(remove|purge|autoremove|install|upgrade|dist-upgrade)\b/i,
+  /\b(yum|dnf)\s+(remove|erase|install|update|upgrade)\b/i,
+  /\bpacman\s+-[RSU]/i,
+  /\bdpkg\b[^|]*\s-[rPi]\b/i,
+  /\bdocker(-compose)?\s+(rm|rmi|stop|kill|down|prune|restart|up)\b/i,
+  /\b(useradd|userdel|usermod|groupadd|groupdel|passwd|chpasswd)\b/i,
+  /\bcrontab\s+-r\b/i,
+];
+function shellCommandCritical(command: string): boolean {
+  return SHELL_CRITICAL.some((re) => re.test(command));
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
@@ -502,7 +534,9 @@ export async function executeTool(
         {
           title: summary,
           detail: `SSH${host ? ` @${host}` : ''}: ${command}`,
-          critical: true, // shell access is always critical
+          // Read-only commands auto-run in "critical" mode; only ones that
+          // delete/overwrite files or stop/destroy a service or guest confirm.
+          critical: shellCommandCritical(command),
           run: () => sshRun(command, host || undefined),
         },
         ctx,

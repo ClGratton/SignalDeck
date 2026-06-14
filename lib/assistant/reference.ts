@@ -56,7 +56,7 @@ From a Proxmox node you can reach its local containers:
 
 Rules:
 - A guest only exists on ITS node. Get the owning node + real vmid from GET /cluster/resources, then set run_shell \`host\` to that node — don't assume one node, don't ssh-hop as a workaround.
-- run_shell is ALWAYS a critical action (it can do anything) — it confirms in agent "all"/"critical" modes.
+- run_shell confirms in agent "all" mode and, in "critical" mode, ONLY when the command is destructive (deletes/overwrites files, or stops/destroys/reconfigures a service or guest). Read-only commands (zpool status, zdb, grep, journalctl, du…) auto-run in "critical" mode.
 - Prefer the proper API first: e.g. HA registry edits go through lab_request homeassistant WebSocket commands (the server has the token), NOT by shelling into the HA container.
 - Keep commands read-only unless the task is explicitly to change something. Report exit code + output.
 - If SSH is not configured, tell the operator to add it in Settings; do not guess.`;
