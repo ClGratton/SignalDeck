@@ -41,6 +41,10 @@ export type AssistantEvent =
   | { type: 'proposal'; proposal: ProposalCard }
   /** Agent mode: an action awaiting an inline Run/Skip decision (/decide). */
   | { type: 'confirm'; card: ProposalCard; critical: boolean }
+  /** A destructive (blacklisted) action that needs a FRESH re-auth before it
+   *  runs; the client posts password + TOTP to /decide. Granted re-auth opens a
+   *  ~30-min window so further destructive actions skip the prompt. */
+  | { type: 'reauth'; card: ProposalCard }
   /** Agent mode: progress of an inline action (auto-run or post-confirm). */
   | { type: 'action'; id: string; title: string; status: ActionStatus; detail?: string; request?: string }
   /** A countdown the model set before waiting; the client ticks it and

@@ -47,9 +47,8 @@ token. NEVER hand the read/display path the elevated key.
 ### Network safety — keep the elevated token usable only from the LAN
 
 The dashboard holds the write token and runs INSIDE the LAN. Its real-time lock
-is the login (password + TOTP + throttle, single-use TOTP) plus — planned, see
-below — a re-auth elevation window for destructive agent actions. Layered, no
-VPN required:
+is the login (password + TOTP + throttle, single-use TOTP) plus the re-auth
+elevation gate below. Layered, no VPN required:
 
 - **Firewall the backend API ports** (Proxmox `8006`, TrueNAS `443`) to the
   dashboard's IP + your admin machines, so a leaked token is useless from outside
@@ -57,9 +56,22 @@ VPN required:
 - The dashboard reaches backends by INTERNAL IP (`*_HOST` = LAN IP,
   `*_VERIFY_TLS=false`); the public `pve`/`nas` hostnames are Cloudflare-Access-
   gated and need not be reachable by the dashboard at all.
-- **Planned (next):** destructive agent actions (a small blacklist —
-  destroy/delete/wipe/format) require a fresh re-auth that opens a ~30-minute
-  elevation window, so a batch of risky ops runs without re-prompting each one.
+
+### Destructive-action re-auth gate (blacklist + 30-min elevation)
+
+A deliberately SMALL blacklist of the most irreversible action shapes —
+`destroy / delete / wipe / format / mkfs / rm -rf`, matched on the action detail
+in `isHighRiskAction()` (`lib/assistant/tools.ts`) — ALWAYS requires a fresh
+re-auth (password + TOTP), independent of the approval mode (a hard floor even in
+`auto`). It REPLACES the normal confirm for those actions: `dispatchAction` emits
+a `reauth` event and waits; the client posts credentials to `/api/assistant/decide`,
+which `reverifyCredentials()` checks and then `grantElevation()` opens a ~30-minute
+window (`isElevated()` in `lib/reauth.ts`). Within that window further destructive
+actions run WITHOUT re-prompting — so destroying two containers is one TOTP, not
+two. Everything NOT on the blacklist keeps its normal mode/approval behavior (the
+critical-mode classification is unchanged). Never widen the gate to swallow benign
+ops, and never resolve a `reauth` id's 'run' without verifying credentials first
+(the decide route enforces this via `isReauthRequired()`).
 
 ### Login (`app/login/actions.ts`) — properties that must hold
 

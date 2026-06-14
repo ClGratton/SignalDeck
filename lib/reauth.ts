@@ -37,6 +37,30 @@ export interface ReauthResult {
   retryAfter?: number;
 }
 
+// ── Destructive-action elevation window ──────────────────────────────────────
+// A blacklist of the most destructive agent actions (destroy/delete/wipe/format)
+// requires a FRESH re-auth before it runs — regardless of the approval mode, so
+// it's a hard floor even in autonomous mode. A successful re-auth opens this
+// ~30-minute window during which further blacklisted actions run WITHOUT
+// re-prompting (so destroying two containers isn't two TOTP codes). The attack
+// surface of that window is minimal; the convenience is the point.
+// Per-process, single-instance (same accepted limit as the login throttle).
+const ELEVATION_TTL_MS = 30 * 60_000;
+let elevatedUntil = 0;
+
+/** Open the elevation window after a verified re-auth. */
+export function grantElevation(): void {
+  elevatedUntil = Date.now() + ELEVATION_TTL_MS;
+}
+/** True while a recent re-auth still covers destructive actions. */
+export function isElevated(): boolean {
+  return Date.now() < elevatedUntil;
+}
+/** Milliseconds left in the window (0 when expired) — for display only. */
+export function elevationRemainingMs(): number {
+  return Math.max(0, elevatedUntil - Date.now());
+}
+
 /** Verify password (+ TOTP when configured) for a sensitive in-session action. */
 export async function reverifyCredentials(password: string, code: string): Promise<ReauthResult> {
   const expected = process.env.DASHBOARD_PASSWORD;

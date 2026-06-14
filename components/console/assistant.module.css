@@ -1201,6 +1201,42 @@
   border: 1px solid color-mix(in oklch, var(--down) 45%, var(--border));
   border-radius: var(--radius-pill);
 }
+.actionRisk[data-reauth] {
+  color: var(--on-accent);
+  background: var(--down);
+  border-color: var(--down);
+}
+
+/* Re-auth form for a destructive (blacklisted) action: password + TOTP, inline. */
+.reauthForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+.reauthNote {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.reauthInput {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  font-size: var(--text-sm);
+  color: var(--ink-strong);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.reauthInput:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.reauthError {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--down-ink);
+}
 .actionExpand {
   display: grid;
   place-items: center;

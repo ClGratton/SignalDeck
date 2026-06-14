@@ -34,6 +34,8 @@ import { sshRun, sshConfigured } from '@/lib/ssh';
 import { addProposal } from '@/lib/assistant/proposals';
 import { addMemory, updateMemory, deleteMemory } from '@/lib/assistant/memory';
 import { addChatNote, setPlan, updatePlanStep } from '@/lib/assistant/chat-workspace';
+import { isElevated } from '@/lib/reauth';
+import { markReauthRequired } from '@/lib/assistant/decisions';
 import { readReference, REFERENCE_TOPICS } from '@/lib/assistant/reference';
 import type {
   AssistantEvent,
@@ -412,6 +414,16 @@ function shellCommandCritical(command: string): boolean {
   return SHELL_CRITICAL.some((re) => re.test(command));
 }
 
+// The DESTRUCTIVE BLACKLIST — a deliberately SMALL set of the most irreversible
+// shapes that ALWAYS require a fresh re-auth (a 30-min elevation window),
+// regardless of approval mode (a hard floor even in 'auto'). Matched on the
+// action's detail string: HTTP DELETE, RPC .delete/.destroy, rm -rf, wipe/
+// format/mkfs. Everything else keeps its normal mode/approval behavior.
+const HIGH_RISK = /\b(destroy|delete|wipe|format|mkfs|wipefs)\b|\brm\s+-\w*[rf]/i;
+function isHighRiskAction(detail: string): boolean {
+  return HIGH_RISK.test(detail);
+}
+
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const int = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) ? v : NaN);
 
@@ -428,23 +440,37 @@ async function dispatchAction(spec: ActionSpec, ctx: ToolContext): Promise<ToolO
   }
 
   const id = randomUUID();
-  const needsConfirm =
-    ctx.approval === 'all' || (ctx.approval === 'critical' && spec.critical);
-
-  if (needsConfirm) {
-    const card: ProposalCard = {
-      id,
-      title: spec.title,
-      detail: spec.detail,
-      expiresAt: Date.now() + 5 * 60_000,
+  const card: ProposalCard = {
+    id,
+    title: spec.title,
+    detail: spec.detail,
+    expiresAt: Date.now() + 5 * 60_000,
+  };
+  const skipped = (): ToolOutcome => {
+    ctx.emit({ type: 'action', id, title: spec.title, status: 'skipped', request: spec.detail });
+    return {
+      content: `The operator did NOT authorize "${spec.title}" — it did NOT run. Do not retry it; carry on with the rest of the task and note it was skipped.`,
     };
-    ctx.emit({ type: 'confirm', card, critical: spec.critical });
+  };
+  const highRisk = isHighRiskAction(spec.detail);
+
+  if (highRisk && !isElevated()) {
+    // Destructive blacklist, no live elevation: REQUIRE a fresh re-auth (which
+    // also serves as the confirmation). Success opens the 30-min window so a
+    // batch of destructive actions only prompts once.
+    markReauthRequired(id);
+    ctx.emit({ type: 'reauth', card });
     const decision = await ctx.awaitDecision(id, ctx.signal);
-    if (decision === 'skip') {
-      ctx.emit({ type: 'action', id, title: spec.title, status: 'skipped', request: spec.detail });
-      return {
-        content: `The operator SKIPPED "${spec.title}" — it did NOT run. Do not retry it; carry on with the rest of the task and note it was skipped.`,
-      };
+    if (decision === 'skip') return skipped();
+    // 'run' ⇒ /api/assistant/decide verified password + TOTP and opened the window.
+  } else if (!highRisk) {
+    // Normal flow: confirm per the approval level. (High-risk + already elevated
+    // falls through and runs straight away — the window covers it.)
+    const needsConfirm = ctx.approval === 'all' || (ctx.approval === 'critical' && spec.critical);
+    if (needsConfirm) {
+      ctx.emit({ type: 'confirm', card, critical: spec.critical });
+      const decision = await ctx.awaitDecision(id, ctx.signal);
+      if (decision === 'skip') return skipped();
     }
   }
 

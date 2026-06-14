@@ -58,7 +58,7 @@ type Item =
   // Ask-mode proposal (confirmed out of band via /execute).
   | { kind: 'proposal'; card: ProposalCard; state: ProposalState; result?: string }
   // Agent-mode inline action (auto-run, or Run/Skip via /decide).
-  | { kind: 'action'; id: string; title: string; status: ActionStatus; critical?: boolean; detail?: string; request?: string }
+  | { kind: 'action'; id: string; title: string; status: ActionStatus; critical?: boolean; reauth?: boolean; detail?: string; request?: string }
   // A countdown the model set before waiting; ticks client-side and auto-resumes
   // the assistant when it elapses, unless the operator pauses it.
   | { kind: 'timer'; id: string; label: string; endsAt: number; status: 'running' | 'done' | 'stopped' }
@@ -1014,6 +1014,15 @@ export function AssistantSidebar({
                 critical: e.critical,
                 request: e.card.detail, // what will run, shown when expanded
               });
+            } else if (e.type === 'reauth') {
+              next.push({
+                kind: 'action',
+                id: e.card.id,
+                title: e.card.title,
+                status: 'pending',
+                reauth: true,
+                request: e.card.detail,
+              });
             } else if (e.type === 'action') {
               const idx = next.findIndex((it) => it.kind === 'action' && it.id === e.id);
               const prior = idx >= 0 ? (next[idx] as Extract<Item, { kind: 'action' }>) : undefined;
@@ -1111,6 +1120,32 @@ export function AssistantSidebar({
       /* the stream will reflect the real outcome regardless */
     }
   }, []);
+
+  // Authorize a destructive (blacklisted) action with a fresh password + TOTP.
+  // On success the server opens the 30-min elevation window and resumes the turn;
+  // on a bad credential the action stays paused so the form can be retried.
+  const reauthDecide = useCallback(
+    async (id: string, password: string, code: string): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const res = await fetch('/api/assistant/decide', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, decision: 'run', password, code }),
+        });
+        if (res.ok) {
+          setItems((prev) =>
+            prev.map((it) => (it.kind === 'action' && it.id === id ? { ...it, status: 'running' } : it)),
+          );
+          return { ok: true };
+        }
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        return { ok: false, error: body.error ?? 'Could not authorize.' };
+      } catch {
+        return { ok: false, error: 'Network error — try again.' };
+      }
+    },
+    [],
+  );
 
   const confirm = async (card: ProposalCard) => {
     setItems((prev) =>
@@ -1430,7 +1465,7 @@ export function AssistantSidebar({
                     </div>
                   );
                 case 'action':
-                  return <ActionCard key={it.id} item={it} onDecide={decide} />;
+                  return <ActionCard key={it.id} item={it} onDecide={decide} onReauth={reauthDecide} />;
                 case 'timer':
                   return (
                     <TimerWidget key={it.id} item={it} onStop={(id) => setTimerPrompt(id)} onDone={onTimerDone} />
@@ -1877,12 +1912,19 @@ export function AssistantSidebar({
 function ActionCard({
   item,
   onDecide,
+  onReauth,
 }: {
   item: Extract<Item, { kind: 'action' }>;
   onDecide: (id: string, d: 'run' | 'skip') => void;
+  onReauth: (id: string, password: string, code: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [open, setOpen] = useState(false);
-  const { id, title, status, critical, detail, request } = item;
+  // Re-auth form state (only used when item.reauth && pending).
+  const [pw, setPw] = useState('');
+  const [code, setCode] = useState('');
+  const [authErr, setAuthErr] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const { id, title, status, critical, reauth, detail, request } = item;
   const statusWord =
     status === 'running' ? 'Running…' : status === 'ok' ? 'Done' : status === 'fail' ? 'Failed' : 'Skipped';
   // Expandable whenever we have something to show — what was SENT and/or the
@@ -1896,6 +1938,11 @@ function ActionCard({
         <span className={styles.actionTitle}>{title}</span>
         {critical && status === 'pending' ? (
           <span className={`${styles.actionRisk} mono`}>critical</span>
+        ) : null}
+        {reauth && status === 'pending' ? (
+          <span className={`${styles.actionRisk} mono`} data-reauth>
+            re-auth
+          </span>
         ) : null}
         {expandable ? (
           <button
@@ -1933,14 +1980,64 @@ function ActionCard({
         </div>
       ) : null}
       {status === 'pending' ? (
-        <div className={styles.proposalActions}>
-          <button type="button" className={styles.confirmBtn} onClick={() => onDecide(id, 'run')}>
-            <Check size={14} strokeWidth={2.4} aria-hidden /> Run
-          </button>
-          <button type="button" className={styles.dismissBtn} onClick={() => onDecide(id, 'skip')}>
-            Skip
-          </button>
-        </div>
+        reauth ? (
+          <form
+            className={styles.reauthForm}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setAuthBusy(true);
+              setAuthErr(null);
+              const r = await onReauth(id, pw, code);
+              if (!r.ok) {
+                setAuthErr(r.error ?? 'Re-authentication failed.');
+                setAuthBusy(false);
+              }
+              // On success the item leaves 'pending' (→ running) and this unmounts.
+            }}
+          >
+            <p className={styles.reauthNote}>
+              Destructive action — re-authorize to run it. Opens a 30-minute window so further
+              destructive steps don’t re-prompt.
+            </p>
+            <input
+              type="password"
+              className={styles.reauthInput}
+              value={pw}
+              onChange={(e) => setPw(e.target.value)}
+              placeholder="Password"
+              autoComplete="off"
+              aria-label="Password"
+            />
+            <input
+              type="text"
+              inputMode="numeric"
+              className={styles.reauthInput}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="2FA code"
+              autoComplete="off"
+              aria-label="Authentication code"
+            />
+            {authErr ? <p className={styles.reauthError}>{authErr}</p> : null}
+            <div className={styles.proposalActions}>
+              <button type="submit" className={styles.confirmBtn} disabled={authBusy || !pw}>
+                <Check size={14} strokeWidth={2.4} aria-hidden /> {authBusy ? 'Authorizing…' : 'Authorize'}
+              </button>
+              <button type="button" className={styles.dismissBtn} onClick={() => onDecide(id, 'skip')}>
+                Skip
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className={styles.proposalActions}>
+            <button type="button" className={styles.confirmBtn} onClick={() => onDecide(id, 'run')}>
+              <Check size={14} strokeWidth={2.4} aria-hidden /> Run
+            </button>
+            <button type="button" className={styles.dismissBtn} onClick={() => onDecide(id, 'skip')}>
+              Skip
+            </button>
+          </div>
+        )
       ) : null}
     </div>
   );

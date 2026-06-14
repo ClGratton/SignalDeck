@@ -17,6 +17,17 @@ export type Decision = 'run' | 'skip';
 const waiters = new Map<string, (d: Decision) => void>();
 const DECISION_TTL_MS = 5 * 60_000;
 
+// Ids whose 'run' MUST be authorized by a fresh re-auth (destructive blacklist),
+// not a plain Run click. The /decide route checks this and verifies credentials
+// + opens the elevation window before resolving such an id.
+const reauthRequired = new Set<string>();
+export function markReauthRequired(id: string): void {
+  reauthRequired.add(id);
+}
+export function isReauthRequired(id: string): boolean {
+  return reauthRequired.has(id);
+}
+
 /** Await the operator's decision for one action. Resolves 'skip' on timeout or
  *  when the request is aborted (tab closed / Stop pressed). */
 export function awaitDecision(id: string, signal?: AbortSignal): Promise<Decision> {
@@ -26,6 +37,7 @@ export function awaitDecision(id: string, signal?: AbortSignal): Promise<Decisio
       if (settled) return;
       settled = true;
       waiters.delete(id);
+      reauthRequired.delete(id);
       clearTimeout(timer);
       resolve(d);
     };
