@@ -290,7 +290,7 @@ export function HistoryStrip() {
       area="history"
       meta={
         <a
-          href="/status"
+          href="/status?from=console"
           target="_blank"
           rel="noopener"
           className={styles.historyLink}

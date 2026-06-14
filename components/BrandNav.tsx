@@ -25,8 +25,15 @@ export function BrandNav() {
   const [dock, setDock] = useState<{ x: number; y: number } | null>(null);
   const [dim, setDim] = useState(false); // opacity fade for the relocation
   const [asLogo, setAsLogo] = useState(false); // hold the plain logo (suppress morph) briefly
+  // Where "back" returns to. Home by default; the console deep-links to the status
+  // page with ?from=console so back lands on the console you came from, not the
+  // landing. Read client-side (initial '/' matches SSR → no hydration mismatch).
+  const [returnTo, setReturnTo] = useState('/');
 
   useEffect(() => {
+    const from = new URLSearchParams(window.location.search).get('from');
+    setReturnTo(from === 'console' || from === 'dashboard' ? '/dashboard' : '/');
+
     const isMobile = window.matchMedia('(max-width: 960px)').matches;
 
     if (!(isLogin && isMobile)) {
@@ -63,9 +70,9 @@ export function BrandNav() {
     // dispatchEvent returns false when a listener called preventDefault().
     const proceed = window.dispatchEvent(new CustomEvent('grtlabs:back', { cancelable: true }));
     if (!proceed) return;
-    // "Back to Grtlabs" means home — deterministic, unlike history.back(),
-    // which can leave the site or land on a stale entry.
-    router.push('/');
+    // Deterministic destination (home, or the console when we came from it) —
+    // unlike history.back(), which can leave the site or land on a stale entry.
+    router.push(returnTo);
   };
 
   return (
@@ -77,7 +84,7 @@ export function BrandNav() {
       data-dim={dim ? true : undefined}
       style={dock ? { top: `${dock.y}px`, left: `${dock.x}px` } : undefined}
       onClick={goBack}
-      aria-label={isHome ? lab.name : `Back to ${lab.name}`}
+      aria-label={isHome ? lab.name : returnTo === '/dashboard' ? 'Back to console' : `Back to ${lab.name}`}
       aria-disabled={isHome}
     >
       <svg className={styles.glyph} viewBox="0 0 32 18" fill="none" aria-hidden>
