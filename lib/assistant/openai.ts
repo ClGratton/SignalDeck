@@ -41,7 +41,7 @@ export async function runOpenAiTurn(
   }));
 
   const messages: OaMessage[] = [
-    { role: 'system', content: systemPrompt(ctx.mode, ctx.approval) },
+    { role: 'system', content: systemPrompt(ctx.mode, ctx.approval, ctx.chatId) },
     ...turns.map((t) => ({ role: t.role, content: t.content }) as OaMessage),
   ];
 

@@ -40,7 +40,7 @@ export async function runAnthropicTurn(
     const stream = client.messages.stream({
       model,
       max_tokens: 16000,
-      system: systemPrompt(ctx.mode, ctx.approval),
+      system: systemPrompt(ctx.mode, ctx.approval, ctx.chatId),
       ...(supportsAdaptiveThinking(model) ? { thinking: { type: 'adaptive' as const } } : {}),
       tools,
       messages,

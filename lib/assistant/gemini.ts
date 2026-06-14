@@ -54,7 +54,7 @@ export async function runGeminiTurn(
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt(ctx.mode, ctx.approval) }] },
+        systemInstruction: { parts: [{ text: systemPrompt(ctx.mode, ctx.approval, ctx.chatId) }] },
         contents,
         tools,
       }),

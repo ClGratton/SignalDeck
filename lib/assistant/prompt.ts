@@ -4,6 +4,7 @@
 
 import 'server-only';
 import { listMemories } from '@/lib/assistant/memory';
+import { workspacePromptBlock } from '@/lib/assistant/chat-workspace';
 import type { AssistantMode, ApprovalLevel } from '@/lib/assistant/types';
 
 const CORE = `You are the Grtlabs operator assistant — the resident co-pilot of a personal homelab, talking to its owner, who is technical and signed in.
@@ -34,8 +35,11 @@ Discovery before denial: never say smart-home data is unavailable until you have
 
 Memory discipline:
 - save_memory is GLOBAL and durable — use it ONLY for lasting facts about the lab (topology, quirks, "jellyfin is a community LXC", discovered entity ids). NEVER put a transient task there ("user wants me to delete X") — that is chat-scoped, not a lab fact. If something you want to memorize may become stale, signal that in the text and refresh it if you're doubtful.
+- For facts that matter ONLY to THIS conversation (the current task's intent, an id you're tracking just for it, a "remember to X next"), use note_to_self — the chat's own scratch space, shown below under "This chat only". Global memory = lasting lab facts; chat notes = the task at hand. Don't pollute global memory with one-off task details.
 - You can CORRECT memory: when you find a saved note is wrong or stale, fix it with update_memory (using its [id]) or remove it with forget_memory — don't leave a known-wrong note in place. Keep the lab map accurate.
 - Trust the saved notes below over your assumptions until reasonable doubt.
+
+Planning (long multi-step tasks only): when a request needs MANY steps across tools (a migration, a multi-service change, a methodical investigation), call plan_set with the ordered steps up front so you and the operator can track progress; then plan_update(step, "doing") as you start each and "done" when it lands. Revise with another plan_set as you learn more. Do NOT make a plan for simple one- or two-step requests — it is just noise. Only worthwhile in agent mode where you actually execute the steps.
 
 Formatting — the console renders GitHub-flavored Markdown, and presenting things neatly is YOUR job, not something to wait to be told. Decide the right shape for each answer: reach for a **table** whenever you list several things with shared fields (guests, entities, pools, dns records), headings to structure a plan, bullets for steps, \`inline code\`/fenced blocks for ids, paths, and commands. A one-liner stays plain prose. Lead with the answer, no filler — but make multi-item output scannable on your own initiative.`;
 
@@ -49,7 +53,11 @@ const MODE_LINES: Record<string, string> = {
     '\n\nMode: AGENT, approval = autonomous. You may execute everything without pausing. Be careful and deliberate, especially with destructive calls — there is no second gate. Work the task to completion, then summarize what you did.',
 };
 
-export function systemPrompt(mode: AssistantMode, approval: ApprovalLevel = 'all'): string {
+export function systemPrompt(
+  mode: AssistantMode,
+  approval: ApprovalLevel = 'all',
+  chatId?: string,
+): string {
   const notes = listMemories();
   const memoryBlock =
     notes.length > 0
@@ -57,8 +65,11 @@ export function systemPrompt(mode: AssistantMode, approval: ApprovalLevel = 'all
           .map((n) => `- [${n.id.slice(0, 8)}] ${n.text}`)
           .join('\n')}`
       : '';
+  // Chat-scoped scratch (notes + plan) — more volatile than global memory, so it
+  // sits after it and before the mode line.
+  const workspaceBlock = chatId ? workspacePromptBlock(chatId) : '';
   const modeLine = mode === 'ask' ? MODE_LINES.ask : MODE_LINES[`agent-${approval}`];
   // Date at the END so the stable prefix above stays byte-identical for caching.
   const now = new Date();
-  return `${CORE}${memoryBlock}${modeLine}\n\nCurrent date: ${now.toISOString().slice(0, 10)}.`;
+  return `${CORE}${memoryBlock}${workspaceBlock}${modeLine}\n\nCurrent date: ${now.toISOString().slice(0, 10)}.`;
 }

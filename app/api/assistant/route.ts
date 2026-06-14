@@ -65,6 +65,9 @@ export async function POST(req: NextRequest) {
     body.mode === 'ask' || body.allowActions === false ? 'ask' : 'agent';
   const approval: ApprovalLevel =
     body.approval === 'critical' || body.approval === 'auto' ? body.approval : 'all';
+  // Scopes the per-chat workspace (notes + plan); validated to a safe id shape.
+  const chatId =
+    typeof body.chatId === 'string' && /^[\w-]{1,64}$/.test(body.chatId) ? body.chatId : undefined;
 
   const turns: ChatTurn[] = (Array.isArray(body.messages) ? body.messages : [])
     .filter(
@@ -98,6 +101,7 @@ export async function POST(req: NextRequest) {
         emit,
         awaitDecision,
         signal: abort.signal,
+        chatId,
       };
       try {
         const kind = providerDef(provider)?.kind;

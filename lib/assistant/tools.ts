@@ -33,6 +33,7 @@ import { buildServiceHistories } from '@/lib/history';
 import { sshRun, sshConfigured } from '@/lib/ssh';
 import { addProposal } from '@/lib/assistant/proposals';
 import { addMemory, updateMemory, deleteMemory } from '@/lib/assistant/memory';
+import { addChatNote, setPlan, updatePlanStep } from '@/lib/assistant/chat-workspace';
 import { readReference, REFERENCE_TOPICS } from '@/lib/assistant/reference';
 import type {
   AssistantEvent,
@@ -67,6 +68,8 @@ export interface ToolContext {
   /** Await the operator's Run/Skip for one action (agent mode confirm path). */
   awaitDecision: (id: string, signal?: AbortSignal) => Promise<'run' | 'skip'>;
   signal?: AbortSignal;
+  /** Active chat id — scopes the per-chat workspace (notes + plan) tools. */
+  chatId?: string;
 }
 
 /** A concrete action the model asked for, ready to dispatch. */
@@ -192,6 +195,47 @@ const READ_TOOLS: ToolDef[] = [
       required: ['topic'],
     },
   },
+  {
+    name: 'note_to_self',
+    description:
+      'Save a short note scoped to THIS chat only (operator-visible in the chat). Use for facts/intent that matter just for the current conversation — the task you are mid-way through, an id you are tracking for it, a "remember to do X next". This is NOT global memory: do not put lasting lab facts here (use save_memory) and do not put one-off task details in save_memory. One concise note, under 300 characters. Never store secrets.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The chat-scoped note, one concise line.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'plan_set',
+    description:
+      'Lay out (or REPLACE) a step-by-step plan/checklist for the CURRENT task — shown to the operator and tracked as you work. Call this ONLY at the start of a genuinely LONG, multi-step request (a migration, a multi-service change, a methodical investigation), then mark progress with plan_update. Do NOT make a plan for simple one- or two-step requests. Pass the ordered steps; they all start unchecked. Call again to revise the plan as you learn more.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Ordered short step descriptions. Empty array clears the plan.',
+        },
+      },
+      required: ['steps'],
+    },
+  },
+  {
+    name: 'plan_update',
+    description:
+      'Update one step of the current plan as you work it: set it "doing" when you start and "done" when it lands (or back to "todo"). Identify the step by its 1-based number or the [id] shown next to it in the plan. Keep the checklist honest so the operator can follow along.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        step: { type: 'string', description: 'The step\'s 1-based number, or its [id] from the plan.' },
+        status: { type: 'string', enum: ['todo', 'doing', 'done'] },
+      },
+      required: ['step', 'status'],
+    },
+  },
 ];
 
 const ACTION_TOOLS: ToolDef[] = [
@@ -315,6 +359,12 @@ export function toolLabel(name: string): string {
       return 'read reference';
     case 'start_timer':
       return 'set a timer';
+    case 'note_to_self':
+      return 'noted for this chat';
+    case 'plan_set':
+      return 'made a plan';
+    case 'plan_update':
+      return 'updated the plan';
     default:
       return name;
   }
@@ -452,6 +502,32 @@ export async function executeTool(
     case 'forget_memory': {
       const ok = deleteMemory(str(args.id));
       return { content: ok ? 'Memory note deleted.' : 'No memory note matched that id.', isError: !ok };
+    }
+
+    case 'note_to_self': {
+      if (!ctx.chatId) return { content: 'No chat context for a chat-scoped note.', isError: true };
+      const res = addChatNote(ctx.chatId, str(args.text));
+      if (res.ok) ctx.emit({ type: 'workspace', workspace: res.workspace });
+      return { content: res.ok ? 'Noted for this chat.' : `Could not note: ${res.detail}`, isError: !res.ok };
+    }
+
+    case 'plan_set': {
+      if (!ctx.chatId) return { content: 'No chat context for a plan.', isError: true };
+      const steps = Array.isArray(args.steps) ? (args.steps as unknown[]).map((s) => str(s)) : [];
+      const res = setPlan(ctx.chatId, steps);
+      ctx.emit({ type: 'workspace', workspace: res.workspace });
+      return { content: res.detail };
+    }
+
+    case 'plan_update': {
+      if (!ctx.chatId) return { content: 'No chat context for a plan.', isError: true };
+      const status = str(args.status);
+      if (!['todo', 'doing', 'done'].includes(status)) {
+        return { content: 'status must be todo, doing, or done.', isError: true };
+      }
+      const res = updatePlanStep(ctx.chatId, str(args.step), status as 'todo' | 'doing' | 'done');
+      if (res.ok) ctx.emit({ type: 'workspace', workspace: res.workspace });
+      return { content: res.detail, isError: !res.ok };
     }
 
     case 'list_ha_entities': {

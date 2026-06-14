@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  ListChecks,
   Clock,
   Eye,
   History,
@@ -38,6 +39,7 @@ import type {
   AssistantMode,
   AssistantProvider,
   ChatTurn,
+  ChatWorkspaceDto,
   MemoryNoteDto,
   ModelsResponse,
   ProposalCard,
@@ -295,6 +297,12 @@ export function AssistantSidebar({
   const [notes, setNotes] = useState<MemoryNoteDto[] | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
 
+  // Per-chat workspace: the assistant's chat-scoped notes + plan/checklist. The
+  // server is the source of truth (tools mutate it, the stream pushes updates);
+  // we fetch it when switching chats and clear it for a fresh chat.
+  const [workspace, setWorkspace] = useState<ChatWorkspaceDto | null>(null);
+  const [planOpen, setPlanOpen] = useState(true);
+
   // Outcomes of confirmed actions, fed to the model with the next message so it
   // knows what actually ran.
   const contextNotes = useRef<string[]>([]);
@@ -316,6 +324,37 @@ export function AssistantSidebar({
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+  }, []);
+
+  // Load a chat's server-side workspace (notes + plan). Defined up here so the
+  // mount/load effect can reference it without a temporal-dead-zone in its deps.
+  const loadWorkspace = useCallback((id: string | null) => {
+    if (!id) {
+      setWorkspace(null);
+      return;
+    }
+    void fetch(`/api/assistant/workspace?chatId=${encodeURIComponent(id)}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { workspace?: ChatWorkspaceDto } | null) => setWorkspace(d?.workspace ?? null))
+      .catch(() => setWorkspace(null));
+  }, []);
+
+  // Operator clears this chat's plan and/or notes.
+  const clearWs = useCallback((what: 'notes' | 'plan' | 'all') => {
+    const id = activeIdRef.current;
+    if (!id) return;
+    void fetch('/api/assistant/workspace', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatId: id, what }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { workspace?: ChatWorkspaceDto } | null) => {
+        if (d?.workspace) setWorkspace(d.workspace);
+      })
+      .catch(() => {
+        /* leave the UI as-is on failure */
+      });
   }, []);
 
   // ── Persistence ─────────────────────────────────────────────────────────
@@ -367,7 +406,9 @@ export function AssistantSidebar({
       const now = Date.now();
       let chat = chatsRef.current.find((c) => c.id === activeIdRef.current);
       if (!chat) {
-        chat = { id: newId(), title: '', createdAt: now, updatedAt: now, items: [] };
+        // Reuse an id `send` may have minted up front (so the server-side
+        // workspace it already keyed matches this persisted chat).
+        chat = { id: activeIdRef.current ?? newId(), title: '', createdAt: now, updatedAt: now, items: [] };
         chatsRef.current.push(chat);
         activeIdRef.current = chat.id;
       }
@@ -403,6 +444,7 @@ export function AssistantSidebar({
         if (active) {
           activeIdRef.current = active.id;
           setItems(active.items);
+          loadWorkspace(active.id);
         }
       }
     } catch {
@@ -437,6 +479,7 @@ export function AssistantSidebar({
           if (active) {
             activeIdRef.current = active.id;
             setItems(active.items);
+            loadWorkspace(active.id);
           }
         }
         setChatList([...chatsRef.current].sort((a, b) => b.updatedAt - a.updatedAt));
@@ -466,7 +509,7 @@ export function AssistantSidebar({
     loadedRef.current = true;
     scrollToBottom();
     // writeChats only runs on the one-time migration branch; it's stable.
-  }, [scrollToBottom, writeChats]);
+  }, [scrollToBottom, writeChats, loadWorkspace]);
 
   // Persist the live transcript (debounced — streaming mutates items rapidly).
   useEffect(() => {
@@ -611,6 +654,7 @@ export function AssistantSidebar({
     flush(items);
     activeIdRef.current = null;
     setItems([]);
+    setWorkspace(null);
     setView('chat');
     requestAnimationFrame(() => inputRef.current?.focus());
   };
@@ -628,6 +672,7 @@ export function AssistantSidebar({
     if (!chat) return;
     activeIdRef.current = chat.id;
     setItems(chat.items);
+    loadWorkspace(chat.id);
     setView('chat');
     scrollToBottom(); // open to the latest message, not the top
   };
@@ -691,6 +736,27 @@ export function AssistantSidebar({
     const el = scrollRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
   }, [items, busy]);
+
+  // The panel has no layout while hidden (mobile drawer sits off-screen; the
+  // desktop column collapses), so any scroll-to-bottom done then measures a
+  // zero-height container and is lost — leaving the transcript pinned at the top
+  // (oldest). When it becomes visible, or we return to the chat view, jump to the
+  // newest message once layout has settled (double rAF).
+  useEffect(() => {
+    if (view !== 'chat') return;
+    stickRef.current = true;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [open, view]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -776,6 +842,9 @@ export function AssistantSidebar({
       setInput('');
       setBusy(true);
       setMenuOpen(false);
+      // Mint the chat id now so the server scopes this chat's workspace from the
+      // first message; flush() reuses the same id when it persists the chat.
+      if (!activeIdRef.current) activeIdRef.current = newId();
 
       const notes = contextNotes.current.splice(0);
       const sent = notes.length > 0 ? `[context: ${notes.join('; ')}]\n${text}` : text;
@@ -798,6 +867,7 @@ export function AssistantSidebar({
             approval,
             provider: effective.provider,
             model: effective.model || undefined,
+            chatId: activeIdRef.current ?? undefined,
           }),
           signal: controller.signal,
         });
@@ -828,6 +898,10 @@ export function AssistantSidebar({
         const decoder = new TextDecoder();
         let buffer = '';
         const handle = (e: AssistantEvent) => {
+          if (e.type === 'workspace') {
+            setWorkspace(e.workspace); // plan/notes changed — update the UI live
+            return;
+          }
           setItems((prev) => {
             const next = [...prev];
             if (e.type === 'text') {
@@ -1156,6 +1230,67 @@ export function AssistantSidebar({
                 Sign in
               </a>
             </div>
+          ) : null}
+          {workspace && (workspace.plan.length > 0 || workspace.notes.length > 0) ? (
+            <section className={styles.workspace} aria-label="This chat's plan and notes">
+              <button
+                type="button"
+                className={styles.wsHead}
+                onClick={() => setPlanOpen((o) => !o)}
+                aria-expanded={planOpen}
+              >
+                <ListChecks size={14} strokeWidth={2.2} aria-hidden />
+                <span className={styles.wsTitle}>This chat</span>
+                {workspace.plan.length > 0 ? (
+                  <span className={`${styles.wsCount} mono tnum`}>
+                    {workspace.plan.filter((s) => s.status === 'done').length}/{workspace.plan.length}
+                  </span>
+                ) : null}
+                <ChevronUp
+                  size={13}
+                  strokeWidth={2.2}
+                  aria-hidden
+                  data-flip={planOpen || undefined}
+                  className={styles.wsChevron}
+                />
+              </button>
+              {planOpen ? (
+                <div className={styles.wsBody}>
+                  {workspace.plan.length > 0 ? (
+                    <ol className={styles.planList}>
+                      {workspace.plan.map((s) => (
+                        <li key={s.id} className={styles.planStep} data-status={s.status}>
+                          <span className={styles.planMark} data-status={s.status} aria-hidden />
+                          <span className={styles.planText}>{s.text}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
+                  {workspace.notes.length > 0 ? (
+                    <div className={styles.wsNotes}>
+                      <span className={styles.wsNotesLabel}>Notes</span>
+                      {workspace.notes.map((n) => (
+                        <p key={n.id} className={styles.wsNoteText}>
+                          {n.text}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className={styles.wsActions}>
+                    {workspace.plan.length > 0 ? (
+                      <button type="button" className={styles.wsClear} onClick={() => clearWs('plan')}>
+                        Clear plan
+                      </button>
+                    ) : null}
+                    {workspace.notes.length > 0 ? (
+                      <button type="button" className={styles.wsClear} onClick={() => clearWs('notes')}>
+                        Clear notes
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </section>
           ) : null}
           {!effective && catalog ? (
             <div className={styles.empty}>

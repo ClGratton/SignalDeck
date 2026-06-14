@@ -46,6 +46,9 @@ export type AssistantEvent =
   /** A countdown the model set before waiting; the client ticks it and
    *  auto-resumes the assistant when it elapses (unless the operator pauses it). */
   | { type: 'timer'; id: string; seconds: number; label: string }
+  /** This chat's workspace (notes + plan) after the assistant changed it; the
+   *  client replaces its local copy so the plan/notes UI updates live. */
+  | { type: 'workspace'; workspace: ChatWorkspaceDto }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
@@ -55,8 +58,36 @@ export interface AssistantRequestBody {
   approval?: ApprovalLevel;
   provider?: AssistantProvider;
   model?: string;
+  /** The active chat's id, so the server can load/update this chat's scratch
+   *  workspace (notes + plan) and inject it into the prompt. */
+  chatId?: string;
   /** Legacy toggle from before modes existed; false maps to mode "ask". */
   allowActions?: boolean;
+}
+
+// ── Per-chat workspace: scratch notes + an optional plan/checklist ───────────
+// Chat-SCOPED (unlike global memory): facts and intent that matter only to this
+// conversation. The assistant writes them via tools; the operator sees them and
+// can clear them. Never holds secrets.
+
+/** A short note relevant only to the current chat. */
+export interface ChatNoteDto {
+  id: string;
+  text: string;
+}
+
+export type PlanStepStatus = 'todo' | 'doing' | 'done';
+
+/** One step of the assistant's multi-step plan for a long task. */
+export interface PlanStepDto {
+  id: string;
+  text: string;
+  status: PlanStepStatus;
+}
+
+export interface ChatWorkspaceDto {
+  notes: ChatNoteDto[];
+  plan: PlanStepDto[];
 }
 
 // ── /api/assistant/models payload (key STATUS only — never key values) ───────
