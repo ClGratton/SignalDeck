@@ -113,7 +113,7 @@ export function StoragePanel({ data, loading }: { data: ConsoleTrueNas | null; l
           {data.pools.map((p) => (
             <div key={p.name} className={styles.poolRow}>
               <Meter label={p.name} used={p.usedTB} total={p.totalTB} unit="TB" />
-              {!p.healthy ? <StatusDot tone="down" label="degraded" /> : null}
+              {!p.healthy ? <StatusDot tone="warn" label="degraded" /> : null}
             </div>
           ))}
           {data.datasets.length > 0 ? (

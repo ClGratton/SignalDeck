@@ -16,8 +16,33 @@ export type RecordedLevel = 'ok' | 'partial' | 'down';
 /** Calendar cell level: recorded levels + "no data" (past, unrecorded) + "future". */
 export type DayLevel = RecordedLevel | 'none' | 'future';
 
-/** Recorded history: { [serviceName]: { 'YYYY-MM-DD': level } }. */
-export type HistoryRecord = Record<string, Record<string, RecordedLevel>>;
+/** Rich per-day entry: worst level + observed minutes in each incident state.
+ *  Minutes accrue from real probe samples, so they UNDER-count quiet periods —
+ *  honest "observed downtime", never invented. */
+export interface DayDetail {
+  lvl: RecordedLevel;
+  /** Minutes observed in 'partial' (degraded) this day. */
+  pMin?: number;
+  /** Minutes observed in 'down' this day. */
+  dMin?: number;
+}
+
+/** A stored day: legacy bare level string, or the rich detail object. */
+export type HistoryEntry = RecordedLevel | DayDetail;
+
+/** Recorded history: { [serviceName]: { 'YYYY-MM-DD': entry } }. */
+export type HistoryRecord = Record<string, Record<string, HistoryEntry>>;
+
+/** The level of any entry, old or new. */
+export function entryLevel(e: HistoryEntry | undefined): RecordedLevel | undefined {
+  if (e == null) return undefined;
+  return typeof e === 'string' ? e : e.lvl;
+}
+/** Observed incident minutes; legacy string entries report none. */
+export function entryMins(e: HistoryEntry | undefined): { pMin: number; dMin: number } {
+  if (e == null || typeof e === 'string') return { pMin: 0, dMin: 0 };
+  return { pMin: e.pMin ?? 0, dMin: e.dMin ?? 0 };
+}
 
 export interface DayStatus {
   date: string; // YYYY-MM-DD
@@ -25,6 +50,10 @@ export interface DayStatus {
   /** Weekday of day 1 lives on days[0]; used to align the calendar grid. */
   weekday: number;
   level: DayLevel;
+  /** Observed minutes degraded today (omitted when none/unrecorded). */
+  partialMins?: number;
+  /** Observed minutes down today (omitted when none/unrecorded). */
+  downMins?: number;
 }
 
 export interface ServiceHistory {
@@ -100,20 +129,39 @@ export function buildServiceHistories(
     for (let d = 1; d <= daysInMonth; d++) {
       const weekday = new Date(year, month, d).getDay();
       const date = `${year}-${pad(month + 1)}-${pad(d)}`;
-      const level: DayLevel = isFuture(d) ? 'future' : recorded[date] ?? 'none';
-      days.push({ date, day: d, weekday, level });
+      const entry = recorded[date];
+      const level: DayLevel = isFuture(d) ? 'future' : entryLevel(entry) ?? 'none';
+      const { pMin, dMin } = entryMins(entry);
+      days.push({
+        date,
+        day: d,
+        weekday,
+        level,
+        partialMins: pMin > 0 ? pMin : undefined,
+        downMins: dMin > 0 ? dMin : undefined,
+      });
     }
     return summarize(s.name, s.name, days);
   });
 
-  // "All systems" = the worst level across services each day.
+  // "All systems" = the worst level across services each day, and the longest
+  // single-service incident time (max, not sum — one 3h outage, not 3×1h added).
   const allDays: DayStatus[] = perSystem[0].days.map((d0, i) => {
     let worst: DayLevel = perSystem[0].days[i].level;
+    let pMin = 0;
+    let dMin = 0;
     for (const sys of perSystem) {
-      const lv = sys.days[i].level;
-      if (SEVERITY[lv] > SEVERITY[worst]) worst = lv;
+      const day = sys.days[i];
+      if (SEVERITY[day.level] > SEVERITY[worst]) worst = day.level;
+      pMin = Math.max(pMin, day.partialMins ?? 0);
+      dMin = Math.max(dMin, day.downMins ?? 0);
     }
-    return { ...d0, level: worst };
+    return {
+      ...d0,
+      level: worst,
+      partialMins: pMin > 0 ? pMin : undefined,
+      downMins: dMin > 0 ? dMin : undefined,
+    };
   });
 
   return [summarize('all', 'All systems', allDays), ...perSystem];

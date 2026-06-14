@@ -17,10 +17,17 @@ import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { SystemHealth } from '@/lib/config';
-import type { HistoryRecord, RecordedLevel } from '@/lib/history';
+import { entryLevel, entryMins, type DayDetail, type HistoryRecord, type RecordedLevel } from '@/lib/history';
 
 const FILE = path.join(process.cwd(), 'data', 'status-history.json');
 const RANK: Record<RecordedLevel, number> = { ok: 0, partial: 1, down: 2 };
+
+// A single sample attributes the time since the previous sample to the current
+// state, but only up to this cap — so a long quiet gap (no page views, or a
+// restart) can't dump hours of "downtime" onto whichever state we happen to see
+// first. Probes land ~every 15s while the page is watched.
+const MAX_GAP_MS = 2 * 60 * 1000;
+let lastSampleMs = 0;
 
 function healthToLevel(h: SystemHealth): RecordedLevel {
   return h === 'down' ? 'down' : h === 'degraded' ? 'partial' : 'ok';
@@ -69,13 +76,32 @@ export function recordSystems(
 ): void {
   const date = dateKey(now);
   const rec = load();
+  const ms = now.getTime();
+  const elapsedMin = lastSampleMs > 0 ? Math.min(ms - lastSampleMs, MAX_GAP_MS) / 60000 : 0;
+  lastSampleMs = ms;
+
   let changed = false;
   for (const s of systems) {
     const level = healthToLevel(s.health);
     const svc = (rec[s.name] ??= {});
     const cur = svc[date];
-    if (cur == null || RANK[level] > RANK[cur]) {
-      svc[date] = level;
+    const prevLevel = entryLevel(cur);
+    let { pMin, dMin } = entryMins(cur);
+
+    if (elapsedMin > 0) {
+      if (level === 'down') dMin += elapsedMin;
+      else if (level === 'partial') pMin += elapsedMin;
+    }
+    const worst: RecordedLevel = prevLevel == null || RANK[level] > RANK[prevLevel] ? level : prevLevel;
+
+    // Write when the level rose, when we added incident time, or to migrate a
+    // legacy bare-string entry to the rich shape.
+    const accrued = elapsedMin > 0 && (level === 'down' || level === 'partial');
+    if (prevLevel == null || worst !== prevLevel || accrued || typeof cur === 'string') {
+      const next: DayDetail = { lvl: worst };
+      if (pMin > 0) next.pMin = Math.round(pMin * 10) / 10;
+      if (dMin > 0) next.dMin = Math.round(dMin * 10) / 10;
+      svc[date] = next;
       changed = true;
     }
   }

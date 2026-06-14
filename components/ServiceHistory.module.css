@@ -223,6 +223,153 @@
   border: 1px solid transparent;
   cursor: default;
 }
+/* Recorded days are buttons (clickable for the detail popover); reset UA chrome
+   and keep them visually identical to the span cells. */
+.cellBtn {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    border-color var(--dur) var(--ease-out-quart),
+    transform var(--dur) var(--ease-out-quart);
+}
+.cellBtn:hover {
+  border-color: var(--border-strong);
+}
+.cellBtn:active {
+  transform: scale(0.92);
+}
+.cellBtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---- Day detail popover (portaled to <body>, positioned in JS) ---- */
+.dayPop {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  pointer-events: none; /* a hover tooltip — never steals the pointer from cells */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding: var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-2);
+  animation: dayPopIn var(--dur) var(--ease-out-quart);
+}
+@keyframes dayPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.dayPopHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+.dayPopDate {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+.dayPopSvc {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.dayPopStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.dayPopSwatch {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--border-strong);
+}
+.dayPopWord {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink);
+}
+.dayPopOngoing {
+  margin-left: auto;
+  font-size: var(--text-2xs, 0.6875rem);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-pill);
+  color: var(--warn-ink);
+  background: color-mix(in oklch, var(--warn) 24%, var(--surface));
+}
+.dayPopDurs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dayPopRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+.dayPopRowKey {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: var(--radius-pill);
+}
+.dayPopRow .dayPopDur {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.dayPopNote {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* Popover swatches reuse the calendar status colors. */
+.dayPopSwatch[data-level='ok'],
+.dayPopRowKey[data-level='ok'] {
+  background: color-mix(in oklch, var(--ok) 60%, var(--surface));
+}
+.dayPopSwatch[data-level='partial'],
+.dayPopRowKey[data-level='partial'] {
+  background: var(--warn);
+}
+.dayPopSwatch[data-level='down'],
+.dayPopRowKey[data-level='down'] {
+  background: var(--down);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dayPop {
+    animation: none;
+  }
+  .cellBtn {
+    transition: none;
+  }
+}
 
 /* Status colors — tiles + swatches share them. */
 .cell[data-level='ok'],
