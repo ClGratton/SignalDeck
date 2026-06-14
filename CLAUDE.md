@@ -58,10 +58,10 @@ the owner explicitly asking. When adding features, re-read this list.
 
 - `/api/console`, `/api/assistant`, `/api/assistant/execute`,
   `/api/assistant/decide`, `/api/assistant/models`, `/api/assistant/keys`,
-  `/api/assistant/memory`, `/api/assistant/chats` are PRIVILEGED: every one
-  starts with `hasValidSession()`. They serve/act on the rich operator data
-  (guest names, datasets, sessions, HA entities, full chat transcripts) that the
-  public aggregates deliberately omit.
+  `/api/assistant/memory`, `/api/assistant/chats`, `/api/assistant/workspace`
+  are PRIVILEGED: every one starts with `hasValidSession()`. They serve/act on
+  the rich operator data (guest names, datasets, sessions, HA entities, full chat
+  transcripts, per-chat plans/notes) that the public aggregates deliberately omit.
 - Chat history is centralized server-side (`data/assistant-chats.json`, gitignored;
   via `/api/assistant/chats`) so it is identical across browsers/devices — a
   single shared collection (single-user gate). localStorage is only a same-browser
@@ -124,9 +124,13 @@ exists to prevent.) The four tiers:
   community LXC"), discovered entity ids. The model builds the map from
   `/cluster/resources` if missing, treats it as possibly stale, and re-saves on
   contradiction. NEVER hardcode these.
-- **Chat-scoped (transient)** — one-off tasks and intent for the current
-  conversation. These must NEVER go to global memory. (Per-chat to-do/notes is a
-  planned store; until then they just live in the transcript.)
+- **Chat-scoped (per-chat workspace)** — one-off tasks and intent for the current
+  conversation. These must NEVER go to global memory. They live in the per-chat
+  workspace (`lib/assistant/chat-workspace.ts`, `data/assistant-workspace.json`,
+  gitignored; keyed by chatId): `note_to_self` for chat-only facts, and
+  `plan_set`/`plan_update` for a checklist the model builds for LONG multi-step
+  tasks only. Injected into the prompt for that chat, streamed to the UI via the
+  `workspace` event, shown to the operator as a pinned card they can clear.
 
 ### Headers & transport
 
