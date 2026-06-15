@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Eye, EyeOff, ShieldAlert, X } from 'lucide-react';
 import { useReveal } from './RevealProvider';
 import { AssistantSettings } from './AssistantSettings';
+import { SessionsSettings } from './SessionsSettings';
 import styles from './settings.module.css';
 
 interface FieldDto {
@@ -238,6 +239,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                   onSaveMultiplier={(v) => void saveValue('ASSISTANT_MULTIPLIER_MODEL', v)}
                 />
               ) : null}
+              {active === 'Security & sessions' ? <SessionsSettings /> : null}
             </div>
           </div>
         )}

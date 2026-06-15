@@ -37,15 +37,25 @@ function multiplierEstimator(): { provider: AssistantProvider; model: string } |
   return { provider, model };
 }
 
+/** A model in the catalog. `contextWindow` is the provider's real token window
+ *  where its API exposes it (Gemini `inputTokenLimit`, some OpenAI-compatible
+ *  `/models` `context_length`); undefined ⇒ the client falls back to its
+ *  heuristic. */
+interface CatalogModel {
+  id: string;
+  label: string;
+  contextWindow?: number;
+}
+
 interface CatalogEntry {
   fetchedAt: number;
-  models: { id: string; label: string }[];
+  models: CatalogModel[];
 }
 type CatalogFile = Partial<Record<AssistantProvider, CatalogEntry>> & {
   multipliers?: { fetchedAt: number; values: Record<string, number>; by?: string };
 };
 
-const FALLBACK: Record<AssistantProvider, { id: string; label: string }[]> = {
+const FALLBACK: Record<AssistantProvider, CatalogModel[]> = {
   anthropic: [
     { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
     { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
@@ -98,7 +108,7 @@ function writeCatalog(next: CatalogFile): void {
 
 // ── Live list fetchers ───────────────────────────────────────────────────────
 
-async function fetchAnthropicModels(key: string): Promise<{ id: string; label: string }[] | null> {
+async function fetchAnthropicModels(key: string): Promise<CatalogModel[] | null> {
   try {
     const res = await fetch('https://api.anthropic.com/v1/models?limit=100', {
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
@@ -117,7 +127,7 @@ async function fetchAnthropicModels(key: string): Promise<{ id: string; label: s
   }
 }
 
-async function fetchGeminiModels(key: string): Promise<{ id: string; label: string }[] | null> {
+async function fetchGeminiModels(key: string): Promise<CatalogModel[] | null> {
   try {
     const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', {
       headers: { 'x-goog-api-key': key },
@@ -126,14 +136,31 @@ async function fetchGeminiModels(key: string): Promise<{ id: string; label: stri
     });
     if (!res.ok) return null;
     const body = (await res.json()) as {
-      models?: { name?: string; displayName?: string; supportedGenerationMethods?: string[] }[];
+      models?: {
+        name?: string;
+        displayName?: string;
+        supportedGenerationMethods?: string[];
+        inputTokenLimit?: number;
+      }[];
     };
     const models = (body.models ?? [])
-      .filter((m): m is { name: string; displayName?: string; supportedGenerationMethods?: string[] } =>
-        typeof m.name === 'string',
+      .filter(
+        (
+          m,
+        ): m is {
+          name: string;
+          displayName?: string;
+          supportedGenerationMethods?: string[];
+          inputTokenLimit?: number;
+        } => typeof m.name === 'string',
       )
       .filter((m) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
-      .map((m) => ({ id: m.name.replace(/^models\//, ''), label: m.displayName ?? m.name }))
+      .map((m) => ({
+        id: m.name.replace(/^models\//, ''),
+        label: m.displayName ?? m.name,
+        // Gemini reports the real input-token window; use it for the context wheel.
+        ...(typeof m.inputTokenLimit === 'number' ? { contextWindow: m.inputTokenLimit } : {}),
+      }))
       // chat models only — image/video/audio/embedding/robotics variants all
       // advertise generateContent too, so exclude them by id
       .filter(
@@ -163,7 +190,7 @@ async function fetchGeminiModels(key: string): Promise<{ id: string; label: stri
 async function fetchOpenAiModels(
   provider: AssistantProvider,
   key: string,
-): Promise<{ id: string; label: string }[] | null> {
+): Promise<CatalogModel[] | null> {
   const base = getProviderBaseUrl(provider);
   if (!base) return null;
   try {
@@ -173,16 +200,22 @@ async function fetchOpenAiModels(
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as { data?: { id?: string }[] };
+    const body = (await res.json()) as { data?: { id?: string; context_length?: number }[] };
     const models = (body.data ?? [])
-      .filter((m): m is { id: string } => typeof m.id === 'string')
+      .filter((m): m is { id: string; context_length?: number } => typeof m.id === 'string')
       .filter(
         (m) =>
           !/(embedding|whisper|tts|audio|image|dall-e|moderation|realtime|transcribe|search|rerank)/i.test(
             m.id,
           ),
       )
-      .map((m) => ({ id: m.id, label: m.id }))
+      // Some OpenAI-compatible providers (e.g. OpenRouter, a few self-hosts)
+      // include `context_length`; raw OpenAI/DeepSeek/GLM usually don't (→ heuristic).
+      .map((m) => ({
+        id: m.id,
+        label: m.id,
+        ...(typeof m.context_length === 'number' ? { contextWindow: m.context_length } : {}),
+      }))
       .sort((a, b) => a.id.localeCompare(b.id));
     return models.length > 0 ? models : null;
   } catch {
@@ -193,7 +226,7 @@ async function fetchOpenAiModels(
 /** The model list for one provider: live (cached 6h) → disk → static fallback. */
 export async function listProviderModels(
   provider: AssistantProvider,
-): Promise<{ id: string; label: string }[]> {
+): Promise<CatalogModel[]> {
   const cat = readCatalog();
   const entry = cat[provider];
   if (entry && Date.now() - entry.fetchedAt < LIST_TTL_MS && entry.models.length > 0) {
@@ -471,5 +504,6 @@ export async function modelOptions(provider: AssistantProvider): Promise<ModelOp
     label: m.label,
     multiplier: mult[m.id] ?? null,
     featured: featured.has(m.id),
+    contextWindow: m.contextWindow ?? null,
   }));
 }

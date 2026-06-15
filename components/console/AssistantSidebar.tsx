@@ -644,10 +644,20 @@ export function AssistantSidebar({
       0,
     );
     const used = Math.ceil(chars / 4) + 1800;
-    const window = effective ? contextWindowFor(effective.provider, effective.model) : 128_000;
+    // Prefer the provider's REAL window (from /api/assistant/models) for the
+    // active model; fall back to the heuristic when the API doesn't expose it.
+    const real = effective
+      ? (catalog?.models[effective.provider] ?? []).find((m) => m.id === effective.model)?.contextWindow
+      : null;
+    const window =
+      typeof real === 'number' && real > 0
+        ? real
+        : effective
+          ? contextWindowFor(effective.provider, effective.model)
+          : 128_000;
     const pct = Math.min(100, Math.round((used / window) * 100));
     return { used, window, pct, level: pct >= 85 ? 'down' : pct >= 60 ? 'warn' : 'ok' };
-  }, [items, effective]);
+  }, [items, effective, catalog]);
 
   // The id of the timer currently counting down (locks the composer), if any.
   const runningTimerId = useMemo(() => {

@@ -83,25 +83,50 @@ ops, and never resolve a `reauth` id's 'run' without verifying credentials first
    factor was wrong; never verify the password before the TOTP code.
 4. **TOTP** (`lib/totp.ts`): verified server-side only; matched step must be
    `> getLastTotpStep()` and is burned via `setLastTotpStep()` (persisted in
-   `data/auth-state.json`) so codes are single-use even across restarts.
+   `data/auth-state.json`) so codes are single-use even across restarts. The
+   `AUTH_REQUIRE_2FA` setting can turn the LOGIN code off (`loginRequires2fa()`),
+   but ONLY login — the destructive re-auth gate above still uses TOTP. When 2FA
+   is off, keep failing with the same generic error and the same factor order.
 5. The `from` redirect accepts internal paths only (no `//` or absolute URLs).
 6. Login form inputs are CONTROLLED (React state). React resets uncontrolled
    fields after a server action responds, which silently wipes the hidden
    password on a failed attempt — do not convert them back.
 
-### Sessions
+### Sessions — token + the active-session REGISTRY
 
-- Token = HMAC-SHA256(`g.<epoch>.<issuedAt>`) with `AUTH_SECRET`; cookie is
-  `httpOnly`, `sameSite: lax`, `secure` in production, 7-day max age.
+- Token = HMAC-SHA256(`g.<epoch>.<sessionId>.<issuedAt>`) with `AUTH_SECRET`
+  (`lib/auth.ts`); cookie is `httpOnly`, `sameSite: lax`, `secure` in production.
+  Cookie max-age tracks the configurable absolute limit. The `sessionId` keys the
+  registry below; it was added to the token, so any pre-existing (4-part) cookie
+  is invalid and forces ONE re-login after deploy — accepted, not a bug.
 - The epoch (`lib/auth-store.ts`) is embedded in every token and checked on
-  verify. "Sign out everywhere" bumps it, invalidating all sessions. Don't
-  remove the epoch check or the nodejs runtime from `middleware.ts` (Edge can't
-  read the epoch file).
-- Every new privileged route MUST be covered: add it to the middleware matcher,
-  or call `hasValidSession()` at the top. Privileged = anything beyond the
+  verify. "Sign out everywhere" bumps it AND wipes the registry; bumping alone
+  still invalidates all tokens. Don't remove the epoch check or the nodejs
+  runtime from `middleware.ts` (Edge can't read the epoch file).
+- **The registry (`lib/session-store.ts`, `data/sessions.json`) enforces what the
+  stateless token can't**: a rolling **idle timeout** (refreshed on every request,
+  so active use never expires; `AUTH_SESSION_IDLE_MINUTES`, 0 = off), an
+  **absolute max** (`AUTH_SESSION_MAX_HOURS`, default 168), and a **concurrent
+  limit** (`AUTH_MAX_SESSIONS`, 0 = unlimited; a new login evicts the oldest by
+  activity — limit 1 ⇒ new device drops the old). All in Settings → Security &
+  sessions, alongside the device list (`/api/sessions`, revoke one/others).
+- **Enforcement split — keep it**: `middleware.ts` stays edge-safe and verifies
+  ONLY the token (signature + epoch + hard cap) — it must NOT import the registry
+  (its `node:fs` breaks the middleware bundle). The REGISTRY (idle/absolute/
+  concurrent + activity refresh) is enforced by `hasValidSession()`, which every
+  privileged route AND the `/dashboard` page call. So an idle-expired/evicted
+  session passes the door but is bounced at the page/route. `validateSession()`
+  both checks and touches `lastSeen` (the rolling heartbeat).
+- **QR cross-device login** (`lib/auth-handoff.ts`): an authed desktop mints a
+  single-use ~60s token (`POST /api/auth/handoff`) rendered as a QR; the token
+  rides in the URL FRAGMENT (`/login/qr#…`, never sent to a server). The phone
+  reads it, confirms "sign in from <device>?", and `POST /api/auth/handoff/redeem`
+  consumes it and mints the phone's OWN session. Redeem is NOT session-gated (the
+  handoff token IS the credential) but is throttled; never weaken single-use/TTL.
+- Every new privileged route MUST be covered: call `hasValidSession()` at the top
+  (the matcher only covers `/dashboard`). Privileged = anything beyond the
   sanitized public aggregates, and ANY route that performs an action on the
-  homelab (restart a VM, etc.). Action routes deserve an extra confirmation
-  step — a 7-day cookie is a long-lived credential.
+  homelab. The `/api/auth/handoff/redeem` route is the deliberate exception.
 
 ### Operator assistant (console sidebar)
 

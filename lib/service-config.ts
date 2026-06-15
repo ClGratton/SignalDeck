@@ -27,7 +27,8 @@ export interface ServiceField {
     | 'Cloudflare'
     | 'Shell (SSH)'
     | 'Assistant'
-    | 'Agent credentials';
+    | 'Agent credentials'
+    | 'Security & sessions';
   secret: boolean; // masked in the UI; revealed only after re-auth
   placeholder?: string;
   /** True for the credentials the assistant needs ELEVATED to ACT (see CREDENTIALS.md). */
@@ -84,6 +85,14 @@ export const SERVICE_FIELDS: ServiceField[] = [
   { name: 'PROXMOX_TOKEN_SECRET_AGENT', label: 'Proxmox token secret — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
   { name: 'TRUENAS_API_KEY_AGENT', label: 'TrueNAS API key — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
   { name: 'HOMEASSISTANT_TOKEN_AGENT', label: 'Home Assistant token — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
+  // Login + session policy (enforced by lib/session-store.ts). All non-secret.
+  // 2FA toggle gates the LOGIN code only (re-auth gates for destructive actions
+  // are unaffected). Idle = rolling timeout that active use keeps refreshing;
+  // absolute = hard ceiling; concurrent = device cap (oldest evicted over it).
+  { name: 'AUTH_REQUIRE_2FA', label: 'Require 2FA at login (true/false)', group: 'Security & sessions', secret: false, placeholder: 'true' },
+  { name: 'AUTH_SESSION_IDLE_MINUTES', label: 'Idle timeout (minutes, 0 = off)', group: 'Security & sessions', secret: false, placeholder: '0' },
+  { name: 'AUTH_SESSION_MAX_HOURS', label: 'Max session age (hours, default 168 = 7d)', group: 'Security & sessions', secret: false, placeholder: '168' },
+  { name: 'AUTH_MAX_SESSIONS', label: 'Max concurrent sessions (0 = unlimited)', group: 'Security & sessions', secret: false, placeholder: '0' },
 ];
 
 const FIELD_NAMES = new Set(SERVICE_FIELDS.map((f) => f.name));

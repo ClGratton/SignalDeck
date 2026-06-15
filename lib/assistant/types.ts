@@ -144,6 +144,10 @@ export interface ModelOption {
   /** Newest model of its tier (pro/flash/opus/…). The menu shows featured
    *  models up front; the rest live behind "More models". */
   featured: boolean;
+  /** Real context window (tokens) where the provider's API exposes it (Gemini
+   *  `inputTokenLimit`, some OpenAI-compatible `context_length`); null ⇒ the
+   *  client uses its heuristic. */
+  contextWindow?: number | null;
 }
 
 export interface ModelsResponse {
