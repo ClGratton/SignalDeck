@@ -14,6 +14,7 @@ import { headers } from 'next/headers';
 import { getLastTotpStep, setLastTotpStep } from '@/lib/auth-store';
 import { checkThrottle, recordFailure, recordSuccess } from '@/lib/login-throttle';
 import { verifyTotp } from '@/lib/totp';
+import { cfg } from '@/lib/service-config';
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -45,12 +46,14 @@ export interface ReauthResult {
 // re-prompting (so destroying two containers isn't two TOTP codes). The attack
 // surface of that window is minimal; the convenience is the point.
 // Per-process, single-instance (same accepted limit as the login throttle).
-const ELEVATION_TTL_MS = 30 * 60_000;
 let elevatedUntil = 0;
 
-/** Open the elevation window after a verified re-auth. */
+/** Open the elevation window after a verified re-auth. Duration is configurable
+ *  (`ASSISTANT_ELEVATION_MINUTES`, default 30, clamped 1–720). */
 export function grantElevation(): void {
-  elevatedUntil = Date.now() + ELEVATION_TTL_MS;
+  const mins = Number(cfg('ASSISTANT_ELEVATION_MINUTES'));
+  const minutes = Number.isFinite(mins) && mins > 0 ? Math.min(mins, 720) : 30;
+  elevatedUntil = Date.now() + minutes * 60_000;
 }
 /** True while a recent re-auth still covers destructive actions. */
 export function isElevated(): boolean {

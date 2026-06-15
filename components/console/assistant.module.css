@@ -868,6 +868,27 @@
 .timerDelete:hover {
   background: color-mix(in oklch, var(--down) 20%, var(--surface));
 }
+
+/* /compact marker — a subtle divider; everything above stays visible but is sent
+   to the model as a brief only. */
+.compactDivider {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.3rem 0;
+  cursor: help;
+}
+.compactLine {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.compactLabel {
+  flex: 0 0 auto;
+  font-size: var(--text-2xs, 0.6875rem);
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
 /* The mode popover anchors to the mode chip on the right. */
 .modePop {
   left: auto;

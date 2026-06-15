@@ -69,6 +69,11 @@ export const SERVICE_FIELDS: ServiceField[] = [
   // Seconds to wait on a single backend REST call before giving up (so a dead
   // service returns an error instead of stalling the turn). Default 3.5s.
   { name: 'ASSISTANT_REQUEST_TIMEOUT', label: 'Backend request timeout (seconds, default 3.5)', group: 'Assistant', secret: false, placeholder: '3.5' },
+  // Safety: whether the destructive blacklist (destroy/delete/wipe/mkfs/rm -rf)
+  // demands a fresh re-auth, and how long that re-auth stays valid. Set the gate
+  // to "false" to drop it back to the normal confirm flow (NOT recommended).
+  { name: 'ASSISTANT_REAUTH_DESTRUCTIVE', label: 'Require re-auth for destructive actions (true/false)', group: 'Assistant', secret: false, placeholder: 'true' },
+  { name: 'ASSISTANT_ELEVATION_MINUTES', label: 'Re-auth elevation window (minutes, default 30)', group: 'Assistant', secret: false, placeholder: '30' },
   // Elevated (write-capable) credentials used ONLY by the agent's action path
   // (lab_request / guest_power / ha_service / run_shell), so the read-only
   // dashboard display can keep a least-privilege token. Each falls back to the

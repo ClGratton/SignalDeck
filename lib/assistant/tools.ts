@@ -36,6 +36,7 @@ import { addMemory, updateMemory, deleteMemory } from '@/lib/assistant/memory';
 import { addChatNote, setPlan, updatePlanStep } from '@/lib/assistant/chat-workspace';
 import { isElevated } from '@/lib/reauth';
 import { markReauthRequired } from '@/lib/assistant/decisions';
+import { cfg } from '@/lib/service-config';
 import { readReference, REFERENCE_TOPICS } from '@/lib/assistant/reference';
 import type {
   AssistantEvent,
@@ -455,7 +456,10 @@ async function dispatchAction(spec: ActionSpec, ctx: ToolContext): Promise<ToolO
       content: `The operator did NOT authorize "${spec.title}" — it did NOT run. Do not retry it; carry on with the rest of the task and note it was skipped.`,
     };
   };
-  const highRisk = isHighRiskAction(spec.detail);
+  // The destructive re-auth gate can be turned off in Settings (drops those
+  // actions back to the normal confirm flow). Default ON.
+  const reauthGateOn = !/^(false|0|no|off)$/i.test((cfg('ASSISTANT_REAUTH_DESTRUCTIVE') ?? '').trim());
+  const highRisk = reauthGateOn && isHighRiskAction(spec.detail);
 
   if (highRisk && !isElevated()) {
     // Destructive blacklist, no live elevation: REQUIRE a fresh re-auth (which

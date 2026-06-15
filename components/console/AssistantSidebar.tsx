@@ -62,6 +62,9 @@ type Item =
   // A countdown the model set before waiting; ticks client-side and auto-resumes
   // the assistant when it elapses, unless the operator pauses it.
   | { kind: 'timer'; id: string; label: string; endsAt: number; status: 'running' | 'done' | 'stopped' }
+  // A /compact marker: the full transcript above STAYS VISIBLE, but everything
+  // before this point is sent to the model as `summary` only. Display vs context.
+  | { kind: 'compaction'; summary: string }
   | { kind: 'error'; text: string };
 
 interface StoredChat {
@@ -165,6 +168,10 @@ function sanitizeItems(raw: unknown): Item[] {
         endsAt: typeof it.endsAt === 'number' ? it.endsAt : Date.now(),
         status: it.status === 'done' ? 'done' : 'stopped',
       });
+    } else if (it.kind === 'compaction') {
+      // Keep the marker so the context stays compacted across reloads (the brief
+      // lives in the item; the full transcript above is still shown).
+      if (typeof it.summary === 'string') out.push({ kind: 'compaction', summary: it.summary });
     }
   }
   return out.slice(-MAX_ITEMS);
@@ -235,9 +242,18 @@ function mergeConsecutive(turns: ChatTurn[]): ChatTurn[] {
  *  As tool results (the operator/system reporting back), it treats them as input
  *  to act on, not prose to reproduce. */
 function buildHistory(items: Item[]): ChatTurn[] {
-  const raw: ChatTurn[] = [];
+  let raw: ChatTurn[] = [];
   for (const it of items) {
-    if (it.kind === 'user') raw.push({ role: 'user', content: it.text });
+    if (it.kind === 'compaction') {
+      // Everything before this is replaced — in the SENT payload only — by the
+      // brief. The transcript above stays on screen; this just shrinks context.
+      raw = [
+        {
+          role: 'user',
+          content: `Summary of our conversation so far — continue from this:\n\n${it.summary}`,
+        },
+      ];
+    } else if (it.kind === 'user') raw.push({ role: 'user', content: it.text });
     else if (it.kind === 'assistant' && it.text) raw.push({ role: 'assistant', content: it.text });
     else if (
       it.kind === 'action' &&
@@ -881,14 +897,19 @@ export function AssistantSidebar({
       abortRef.current = null;
       setBusy(false);
     }
-    if (summary.trim()) {
-      // Reset the transcript to just the brief; that's the smaller context going
-      // forward. Keep it visibly marked so you know compaction happened.
-      setItems([{ kind: 'assistant', text: `**Context compacted.**\n\n${summary.trim()}` }]);
-      scrollToBottom();
-    } else {
-      setItems((prev) => prev.filter((it) => it.kind !== 'tool' || it.label !== 'compacting context…'));
-    }
+    // Drop the "compacting…" chip; if we got a brief, APPEND a compaction marker
+    // (the full transcript stays on screen — only what's SENT to the model
+    // shrinks, via buildHistory). Older /compact markers are superseded by this
+    // newest one, so keep just the latest.
+    setItems((prev) => {
+      const cleaned = prev.filter(
+        (it) =>
+          !(it.kind === 'tool' && it.label.startsWith('compacting context')) &&
+          it.kind !== 'compaction',
+      );
+      return summary.trim() ? [...cleaned, { kind: 'compaction', summary: summary.trim() }] : cleaned;
+    });
+    if (summary.trim()) scrollToBottom();
   }, [busy, effective, items, approval, scrollToBottom]);
 
   // ── Skills: slash commands handled client-side. A tiny registry so adding a
@@ -1469,6 +1490,16 @@ export function AssistantSidebar({
                 case 'timer':
                   return (
                     <TimerWidget key={it.id} item={it} onStop={(id) => setTimerPrompt(id)} onDone={onTimerDone} />
+                  );
+                case 'compaction':
+                  return (
+                    <div key={i} className={styles.compactDivider} title={it.summary}>
+                      <span className={styles.compactLine} aria-hidden />
+                      <span className={styles.compactLabel}>
+                        context compacted — older messages stay here but aren’t re-sent
+                      </span>
+                      <span className={styles.compactLine} aria-hidden />
+                    </div>
                   );
                 case 'proposal': {
                   const { card, state, result } = it;
