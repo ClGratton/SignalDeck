@@ -42,6 +42,17 @@ const MAX_JSON_CHARS = 4_000_000;
 
 let cached: ChatCollection | null = null;
 
+// A chat with a LIVE server-side agent task is owned by the task runner, which
+// writes that chat's in-progress turn as it goes. A client PUT sends the WHOLE
+// collection and may carry a stale copy of that chat (it detached mid-turn), so
+// we must not let it overwrite the server's version. The tasks module injects
+// this predicate on load (kept as a hook to avoid a chat-store → tasks import
+// cycle); default = nothing is task-owned.
+let liveTaskChatIds: () => string[] = () => [];
+export function setLiveTaskGuard(fn: () => string[]): void {
+  liveTaskChatIds = fn;
+}
+
 /** Validate the envelope, cap sizes, keep `items` opaque. Never throws. */
 function coerce(raw: unknown): ChatCollection {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
@@ -81,6 +92,24 @@ export function readChats(): ChatCollection {
 
 export function writeChats(input: unknown): { ok: boolean; detail: string } {
   const coll = coerce(input);
+  // Preserve any task-owned chat from the current store: the live turn the task
+  // is writing wins over whatever the client just PUT (which may be stale).
+  const owned = new Set(liveTaskChatIds());
+  if (owned.size > 0) {
+    const prior = cached ?? readChats();
+    for (const id of owned) {
+      const keep = prior.chats.find((c) => c.id === id);
+      if (!keep) continue;
+      const idx = coll.chats.findIndex((c) => c.id === id);
+      if (idx >= 0) coll.chats[idx] = keep;
+      else coll.chats.push(keep);
+    }
+    coll.chats.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+  return persistCollection(coll);
+}
+
+function persistCollection(coll: ChatCollection): { ok: boolean; detail: string } {
   const json = JSON.stringify(coll, null, 2);
   if (json.length > MAX_JSON_CHARS) {
     return { ok: false, detail: 'Chat history exceeds the size limit.' };
@@ -94,4 +123,14 @@ export function writeChats(input: unknown): { ok: boolean; detail: string } {
   } catch {
     return { ok: false, detail: 'Could not persist chats to disk.' };
   }
+}
+
+/** Server-side write of ONE chat (used by the task runner to persist a turn it
+ *  owns). Replaces/inserts just that chat and BYPASSES the live-task guard — the
+ *  task is the legitimate owner here, so its in-progress write must land. */
+export function writeTaskChat(rec: StoredChatRecord): { ok: boolean; detail: string } {
+  const prior = cached ?? readChats();
+  const others = prior.chats.filter((c) => c.id !== rec.id);
+  const coll = coerce({ activeId: prior.activeId, chats: [rec, ...others] });
+  return persistCollection(coll);
 }

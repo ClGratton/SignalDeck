@@ -73,6 +73,11 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Active chat id — scopes the per-chat workspace (notes + plan) tools. */
   chatId?: string;
+  /** Set by start_timer to END the turn and hand the wait to the SERVER-side
+   *  task runner, which re-invokes the agent when it elapses (so the countdown
+   *  survives a reload/logout). The provider loops return as soon as this is set;
+   *  the task reads it to schedule the resume. */
+  sleep?: { seconds: number; label: string; id: string };
 }
 
 /** A concrete action the model asked for, ready to dispatch. */
@@ -621,7 +626,13 @@ export async function executeTool(
       if (Number.isNaN(secs)) secs = 0;
       secs = Math.min(Math.max(secs, 1), 356400); // up to 99 hours
       const reason = str(args.reason) || 'waiting';
-      ctx.emit({ type: 'timer', id: randomUUID(), seconds: secs, label: reason });
+      const timerId = randomUUID();
+      const until = Date.now() + secs * 1000;
+      ctx.emit({ type: 'timer', id: timerId, seconds: secs, label: reason, until });
+      // Hand the wait to the server-side task runner: it ends this turn, sleeps,
+      // and re-invokes the agent when `until` arrives — so the countdown survives
+      // a reload/logout. The provider loop returns the moment ctx.sleep is set.
+      ctx.sleep = { seconds: secs, label: reason, id: timerId };
       return {
         content: `Timer started: ${secs}s — ${reason}. END YOUR TURN now (no more tool calls). You will be re-invoked automatically when it elapses to continue, unless the operator pauses it to ask something.`,
       };

@@ -43,6 +43,8 @@ import type {
   MemoryNoteDto,
   ModelsResponse,
   ProposalCard,
+  StreamFrame,
+  TaskStatusDto,
 } from '@/lib/assistant/types';
 import { useReveal } from './RevealProvider';
 import { Markdown } from './Markdown';
@@ -295,6 +297,13 @@ export function AssistantSidebar({
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  // Flips true once the chat collection has loaded/reconciled, so the one-time
+  // task-reattach pass can run against the right active chat.
+  const [chatsLoaded, setChatsLoaded] = useState(false);
+  // Chats with a live server task (running or sleeping) — drives the "working"
+  // dot in the chat list. Mirrors serverOwnedRef, which stays the synchronous
+  // source of truth for the push gating.
+  const [liveChats, setLiveChats] = useState<string[]>([]);
   const [view, setView] = useState<'chat' | 'chats' | 'memory'>('chat');
   // Set when any privileged call returns 401 — the 7-day cookie expired or the
   // auth epoch was bumped. Renders a "sign in again" banner instead of dumping
@@ -337,10 +346,9 @@ export function AssistantSidebar({
   const [workspace, setWorkspace] = useState<ChatWorkspaceDto | null>(null);
   const [planOpen, setPlanOpen] = useState(true);
 
-  // Timer turn-state: while a timer runs the composer is locked (the turn is
-  // "busy waiting"). The Stop button opens a keep-or-delete prompt; choosing
-  // "keep & talk" sets `interjecting` so you can message the agent mid-wait.
-  const [interjecting, setInterjecting] = useState(false);
+  // Timer turn-state: while a SERVER-side timer runs the composer is locked (the
+  // turn is "busy waiting"). The Stop button opens a keep-or-cancel prompt;
+  // cancelling stops the task so its scheduled resume is dropped.
   const [timerPrompt, setTimerPrompt] = useState<string | null>(null);
 
   // Outcomes of confirmed actions, fed to the model with the next message so it
@@ -350,6 +358,27 @@ export function AssistantSidebar({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Aborts the in-flight turn when the operator hits Stop.
   const abortRef = useRef<AbortController | null>(null);
+  // Server-side agent tasks: the turn now runs on the SERVER, decoupled from any
+  // open request, so it survives a reload/logout and re-runs timers on its own.
+  // The client just attaches to (and reattaches to) the task's event stream.
+  //  • lastSeqRef: highest frame seq seen per chat, so a reattach replays only
+  //    what was missed (GET /api/assistant/stream?from=seq).
+  //  • serverOwnedRef: chats with a live server task — excluded from the client's
+  //    own chat-store push so it can't clobber the turn the server is writing.
+  const lastSeqRef = useRef<Map<string, number>>(new Map());
+  const serverOwnedRef = useRef<Set<string>>(new Set());
+  // Guards the one-time task-reattach pass after load (so it runs exactly once).
+  const activatedRef = useRef(false);
+  // Mark/unmark a chat as having a live server task: update the ref (sync, for
+  // push gating) AND the state (for the chat-list "working" cue).
+  const markServerOwned = useCallback((id: string) => {
+    serverOwnedRef.current.add(id);
+    setLiveChats((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  }, []);
+  const unmarkServerOwned = useCallback((id: string) => {
+    serverOwnedRef.current.delete(id);
+    setLiveChats((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev));
+  }, []);
 
   // "Stuck to bottom" follows new content; once the operator scrolls up to read,
   // we stop yanking them back down until they return to the bottom themselves.
@@ -409,10 +438,16 @@ export function AssistantSidebar({
   const pushServer = useCallback(() => {
     if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
     pushTimerRef.current = window.setTimeout(() => {
+      // A chat with a LIVE server task is owned by the task runner (it's writing
+      // that turn as it goes); omit it so a debounced client push can't overwrite
+      // the in-progress turn with a stale snapshot. The server also guards this.
+      const owned = serverOwnedRef.current;
+      const chats =
+        owned.size > 0 ? chatsRef.current.filter((c) => !owned.has(c.id)) : chatsRef.current;
       void fetch('/api/assistant/chats', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ activeId: activeIdRef.current, chats: chatsRef.current }),
+        body: JSON.stringify({ activeId: activeIdRef.current, chats }),
       })
         .then((r) => {
           if (r.status === 401) setSessionExpired(true);
@@ -547,6 +582,7 @@ export function AssistantSidebar({
       /* keep defaults */
     }
     loadedRef.current = true;
+    setChatsLoaded(true);
     scrollToBottom();
     // writeChats only runs on the one-time migration branch; it's stable.
   }, [scrollToBottom, writeChats, loadWorkspace]);
@@ -618,14 +654,11 @@ export function AssistantSidebar({
     const t = items.find((it) => it.kind === 'timer' && it.status === 'running');
     return t && t.kind === 'timer' ? t.id : null;
   }, [items]);
-  // When the timer is gone (fired or deleted) drop the interjection + prompt.
+  // When the timer is gone (fired or cancelled) drop the prompt.
   useEffect(() => {
-    if (!runningTimerId) {
-      setInterjecting(false);
-      setTimerPrompt(null);
-    }
+    if (!runningTimerId) setTimerPrompt(null);
   }, [runningTimerId]);
-  const timerLocks = !!runningTimerId && !interjecting; // composer locked, button = Stop
+  const timerLocks = !!runningTimerId; // composer locked while a timer waits; button = Stop
 
   const choose = (provider: AssistantProvider, model: string) => {
     const next = { provider, model };
@@ -742,6 +775,9 @@ export function AssistantSidebar({
     loadWorkspace(chat.id);
     setView('chat');
     scrollToBottom(); // open to the latest message, not the top
+    // If this chat has a live server task (still running, or sleeping on a
+    // timer), reattach to it / re-arm its countdown.
+    void activateChatTasks();
   };
 
   const deleteChat = (id: string) => {
@@ -826,8 +862,21 @@ export function AssistantSidebar({
   }, [open, view]);
 
   const stop = useCallback(() => {
+    // Detach the local stream AND tell the server to stop the task (which cancels
+    // any scheduled timer resume) — otherwise it would keep running server-side.
     abortRef.current?.abort();
-  }, []);
+    const chatId = activeIdRef.current;
+    if (chatId) {
+      unmarkServerOwned(chatId);
+      void fetch('/api/assistant/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId }),
+      }).catch(() => {
+        /* the local stream is already detached */
+      });
+    }
+  }, [unmarkServerOwned]);
 
   // /compact — replace the running transcript with a concise model-written brief
   // so the re-sent context (and its token cost) shrinks, while the model keeps
@@ -853,7 +902,8 @@ export function AssistantSidebar({
     abortRef.current = controller;
     let summary = '';
     try {
-      const res = await fetch('/api/assistant', {
+      // Ephemeral one-shot (not a durable task): /compact just needs the brief.
+      const res = await fetch('/api/assistant/oneshot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -929,6 +979,244 @@ export function AssistantSidebar({
     [compact],
   );
 
+  // ── Server-side task transport ────────────────────────────────────────────
+  // A turn runs as a SERVER task; the client attaches to its NDJSON frame stream
+  // and can detach/reattach freely. applyEvent folds one event into the
+  // transcript (lifted out of send so reattach reuses it).
+  const applyEvent = useCallback((e: AssistantEvent) => {
+    if (e.type === 'workspace') {
+      setWorkspace(e.workspace);
+      return;
+    }
+    if (e.type === 'done' || e.type === 'sleep') return; // lifecycle, no transcript row
+    setItems((prev) => {
+      const next = [...prev];
+      if (e.type === 'text') {
+        const last = next[next.length - 1];
+        if (last?.kind === 'assistant') next[next.length - 1] = { kind: 'assistant', text: last.text + e.text };
+        else next.push({ kind: 'assistant', text: e.text });
+      } else if (e.type === 'reasoning') {
+        const last = next[next.length - 1];
+        if (last?.kind === 'reasoning') next[next.length - 1] = { kind: 'reasoning', text: last.text + e.text };
+        else next.push({ kind: 'reasoning', text: e.text });
+      } else if (e.type === 'tool') {
+        next.push({ kind: 'tool', label: e.label });
+      } else if (e.type === 'proposal') {
+        next.push({ kind: 'proposal', card: e.proposal, state: 'pending' });
+      } else if (e.type === 'confirm') {
+        next.push({ kind: 'action', id: e.card.id, title: e.card.title, status: 'pending', critical: e.critical, request: e.card.detail });
+      } else if (e.type === 'reauth') {
+        next.push({ kind: 'action', id: e.card.id, title: e.card.title, status: 'pending', reauth: true, request: e.card.detail });
+      } else if (e.type === 'action') {
+        const idx = next.findIndex((it) => it.kind === 'action' && it.id === e.id);
+        const prior = idx >= 0 ? (next[idx] as Extract<Item, { kind: 'action' }>) : undefined;
+        const row: Item = {
+          kind: 'action',
+          id: e.id,
+          title: e.title,
+          status: e.status,
+          detail: e.detail,
+          request: e.request ?? prior?.request,
+          critical: prior?.critical,
+        };
+        if (idx >= 0) next[idx] = row;
+        else next.push(row);
+      } else if (e.type === 'timer') {
+        // `until` is the server's authoritative wake time; fall back to now+secs.
+        next.push({
+          kind: 'timer',
+          id: e.id,
+          label: e.label,
+          endsAt: e.until ?? Date.now() + e.seconds * 1000,
+          status: 'running',
+        });
+      } else if (e.type === 'error') {
+        next.push({ kind: 'error', text: e.message });
+      }
+      return next;
+    });
+  }, []);
+
+  type PumpResult =
+    | { reason: 'done' }
+    | { reason: 'error' }
+    | { reason: 'sleep'; until: number }
+    | { reason: 'closed' };
+
+  // Read frames off a task stream, applying each event and tracking the last seq
+  // (so a reattach replays only what was missed). Returns why it stopped.
+  const pumpStream = useCallback(
+    async (chatId: string, reader: ReadableStreamDefaultReader<Uint8Array>): Promise<PumpResult> => {
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch (err) {
+          if ((err as Error)?.name === 'AbortError') return { reason: 'closed' };
+          throw err;
+        }
+        if (chunk.done) return { reason: 'closed' };
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let frame: StreamFrame;
+          try {
+            frame = JSON.parse(line) as StreamFrame;
+          } catch {
+            continue;
+          }
+          if (typeof frame?.seq === 'number') lastSeqRef.current.set(chatId, frame.seq);
+          const ev = frame?.event;
+          if (!ev) continue;
+          if (ev.type === 'sleep') {
+            // The server owns the wait now — drop the connection and reattach at
+            // wake (the countdown widget triggers it) instead of holding it open.
+            try {
+              await reader.cancel();
+            } catch {
+              /* already closed */
+            }
+            return { reason: 'sleep', until: ev.until };
+          }
+          applyEvent(ev);
+          if (ev.type === 'done') return { reason: 'done' };
+          if (ev.type === 'error') return { reason: 'error' };
+        }
+      }
+    },
+    [applyEvent],
+  );
+
+  // Open a reattach stream for a chat's live task from the last seq we saw.
+  const openReattach = useCallback(
+    async (chatId: string, signal?: AbortSignal): Promise<ReadableStreamDefaultReader<Uint8Array> | null> => {
+      const from = lastSeqRef.current.get(chatId) ?? 0;
+      try {
+        const res = await fetch(
+          `/api/assistant/stream?chatId=${encodeURIComponent(chatId)}&from=${from}`,
+          { cache: 'no-store', signal },
+        );
+        if (res.status === 401) {
+          setSessionExpired(true);
+          return null;
+        }
+        if (!res.ok || !res.body) return null; // 404 = no live task to attach to
+        return res.body.getReader();
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
+
+  // Pull a chat's transcript from the shared store (the server wrote the turn
+  // there) — used after a detached or interrupted turn so the result shows up.
+  const reloadChatFromServer = useCallback(async (chatId: string) => {
+    try {
+      const res = await fetch('/api/assistant/chats', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = (await res.json()) as { chats?: StoredChat[] };
+      const fresh = (data.chats ?? []).map((c) => ({ ...c, items: sanitizeItems(c.items) }));
+      chatsRef.current = mergeChats(fresh, chatsRef.current);
+      const chat = chatsRef.current.find((c) => c.id === chatId);
+      if (chat && activeIdRef.current === chatId) setItems(chat.items);
+      setChatList([...chatsRef.current].sort((a, b) => b.updatedAt - a.updatedAt));
+    } catch {
+      /* keep what we have */
+    }
+  }, []);
+
+  // The turn (for this chat) is over: release the lock + ownership. `reload`
+  // pulls the server-written transcript (needed when we missed live events).
+  const finishTurn = useCallback(
+    (chatId: string, opts?: { reload?: boolean }) => {
+      unmarkServerOwned(chatId);
+      if (activeIdRef.current === chatId) {
+        setBusy(false);
+        abortRef.current = null;
+        requestAnimationFrame(() => inputRef.current?.focus());
+      }
+      if (opts?.reload) void reloadChatFromServer(chatId);
+    },
+    [reloadChatFromServer, unmarkServerOwned],
+  );
+
+  // Drive a chat's stream to completion: pump, and on an unexpected close or a
+  // server-side sleep, decide whether to reattach now, wait for the countdown,
+  // or finish (pulling the stored result).
+  const streamLoop = useCallback(
+    async (chatId: string, firstReader: ReadableStreamDefaultReader<Uint8Array>, signal?: AbortSignal) => {
+      let reader = firstReader;
+      for (;;) {
+        const result = await pumpStream(chatId, reader);
+        if (result.reason === 'done' || result.reason === 'error') {
+          finishTurn(chatId);
+          return;
+        }
+        if (result.reason === 'sleep') {
+          // Waiting on the server's timer — release the busy spinner; the timer
+          // widget (or a reload) reattaches at wake. Chat stays server-owned.
+          if (activeIdRef.current === chatId) setBusy(false);
+          return;
+        }
+        // Closed unexpectedly (network blip / tunnel) — the task may live on.
+        let status: TaskStatusDto | null = null;
+        try {
+          const r = await fetch('/api/assistant/tasks', { cache: 'no-store' });
+          if (r.ok) {
+            const d = (await r.json()) as { tasks?: TaskStatusDto[] };
+            status = (d.tasks ?? []).find((t) => t.chatId === chatId) ?? null;
+          }
+        } catch {
+          /* offline */
+        }
+        if (!status || status.status === 'done' || status.status === 'error') {
+          finishTurn(chatId, { reload: true });
+          return;
+        }
+        if (status.status === 'sleeping') {
+          if (activeIdRef.current === chatId) setBusy(false);
+          return; // countdown / reload reattaches at wake
+        }
+        // Still running server-side: reattach (small backoff to avoid a hot loop).
+        await new Promise((r) => setTimeout(r, 500));
+        const next = await openReattach(chatId, signal);
+        if (!next) {
+          finishTurn(chatId, { reload: true });
+          return;
+        }
+        reader = next;
+      }
+    },
+    [pumpStream, openReattach, finishTurn],
+  );
+
+  // Reattach to a chat's already-running task (after a timer wake, a reload, or
+  // a dropped connection) and drive it to completion.
+  const reattachResume = useCallback(
+    async (chatId: string) => {
+      markServerOwned(chatId);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const reader = await openReattach(chatId, controller.signal);
+      if (!reader) {
+        // No live task — it finished while we were away; show the stored result.
+        finishTurn(chatId, { reload: true });
+        return;
+      }
+      if (activeIdRef.current === chatId) {
+        setSessionExpired(false);
+        setBusy(true);
+      }
+      await streamLoop(chatId, reader, controller.signal);
+    },
+    [openReattach, streamLoop, finishTurn, markServerOwned],
+  );
+
   const send = useCallback(
     async (raw: string) => {
       const text = raw.trim();
@@ -946,9 +1234,11 @@ export function AssistantSidebar({
       setInput('');
       setBusy(true);
       setMenuOpen(false);
-      // Mint the chat id now so the server scopes this chat's workspace from the
-      // first message; flush() reuses the same id when it persists the chat.
+      // Mint the chat id now so the server can key this chat's task + workspace
+      // from the first message; flush() reuses the same id when it persists.
       if (!activeIdRef.current) activeIdRef.current = newId();
+      const chatId = activeIdRef.current;
+      markServerOwned(chatId);
 
       const notes = contextNotes.current.splice(0);
       const sent = notes.length > 0 ? `[context: ${notes.join('; ')}]\n${text}` : text;
@@ -971,18 +1261,23 @@ export function AssistantSidebar({
             approval,
             provider: effective.provider,
             model: effective.model || undefined,
-            chatId: activeIdRef.current ?? undefined,
+            chatId,
           }),
           signal: controller.signal,
         });
         if (res.status === 401) {
-          // The session cookie expired or was invalidated — show the banner
-          // (with a sign-in link) rather than a cryptic "unauthorized" row.
           setSessionExpired(true);
           setItems((prev) => [
             ...prev,
             { kind: 'error', text: 'Your session expired — sign in again to continue.' },
           ]);
+          finishTurn(chatId);
+          return;
+        }
+        // A task is already running for this chat, or it finished before we could
+        // attach — reattach (or pull the stored result) instead of erroring.
+        if (res.status === 409 || res.status === 202) {
+          await reattachResume(chatId);
           return;
         }
         if (!res.ok || !res.body) {
@@ -994,132 +1289,101 @@ export function AssistantSidebar({
             /* non-JSON */
           }
           setItems((prev) => [...prev, { kind: 'error', text: message }]);
+          finishTurn(chatId);
           return;
         }
-
         setSessionExpired(false); // got a live stream — the session is valid
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        const handle = (e: AssistantEvent) => {
-          if (e.type === 'workspace') {
-            setWorkspace(e.workspace); // plan/notes changed — update the UI live
-            return;
-          }
-          setItems((prev) => {
-            const next = [...prev];
-            if (e.type === 'text') {
-              const last = next[next.length - 1];
-              if (last?.kind === 'assistant') {
-                next[next.length - 1] = { kind: 'assistant', text: last.text + e.text };
-              } else {
-                next.push({ kind: 'assistant', text: e.text });
-              }
-            } else if (e.type === 'reasoning') {
-              const last = next[next.length - 1];
-              if (last?.kind === 'reasoning') {
-                next[next.length - 1] = { kind: 'reasoning', text: last.text + e.text };
-              } else {
-                next.push({ kind: 'reasoning', text: e.text });
-              }
-            } else if (e.type === 'tool') {
-              next.push({ kind: 'tool', label: e.label });
-            } else if (e.type === 'proposal') {
-              next.push({ kind: 'proposal', card: e.proposal, state: 'pending' });
-            } else if (e.type === 'confirm') {
-              next.push({
-                kind: 'action',
-                id: e.card.id,
-                title: e.card.title,
-                status: 'pending',
-                critical: e.critical,
-                request: e.card.detail, // what will run, shown when expanded
-              });
-            } else if (e.type === 'reauth') {
-              next.push({
-                kind: 'action',
-                id: e.card.id,
-                title: e.card.title,
-                status: 'pending',
-                reauth: true,
-                request: e.card.detail,
-              });
-            } else if (e.type === 'action') {
-              const idx = next.findIndex((it) => it.kind === 'action' && it.id === e.id);
-              const prior = idx >= 0 ? (next[idx] as Extract<Item, { kind: 'action' }>) : undefined;
-              const row: Item = {
-                kind: 'action',
-                id: e.id,
-                title: e.title,
-                status: e.status,
-                detail: e.detail,
-                request: e.request ?? prior?.request,
-                critical: prior?.critical,
-              };
-              if (idx >= 0) next[idx] = row;
-              else next.push(row);
-            } else if (e.type === 'timer') {
-              next.push({
-                kind: 'timer',
-                id: e.id,
-                label: e.label,
-                endsAt: Date.now() + e.seconds * 1000,
-                status: 'running',
-              });
-            } else if (e.type === 'error') {
-              next.push({ kind: 'error', text: e.message });
-            }
-            return next;
-          });
-        };
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              handle(JSON.parse(line) as AssistantEvent);
-            } catch {
-              /* partial line */
-            }
-          }
-        }
+        await streamLoop(chatId, res.body.getReader(), controller.signal);
       } catch (err) {
         if ((err as Error)?.name === 'AbortError') {
-          setItems((prev) => [...prev, { kind: 'error', text: 'Stopped.' }]);
+          // Stop pressed: the server task is told to stop in stop(); settle here.
+          finishTurn(chatId, { reload: true });
         } else {
-          setItems((prev) => [...prev, { kind: 'error', text: 'Connection lost mid-answer.' }]);
+          // Connection dropped mid-turn — the task lives on server-side; reattach
+          // rather than stranding the turn as "connection lost".
+          void reattachResume(chatId);
         }
-      } finally {
-        abortRef.current = null;
-        setBusy(false);
-        requestAnimationFrame(() => inputRef.current?.focus());
       }
     },
-    [busy, effective, mode, approval, items, compact, SKILLS],
+    [busy, effective, mode, approval, items, SKILLS, streamLoop, reattachResume, finishTurn, markServerOwned],
   );
 
-  // Operator paused a countdown to interject — cancel its auto-resume.
-  const stopTimer = useCallback((id: string) => {
+  // Discover live server tasks on load / chat-switch and reattach the active one
+  // (or re-arm its countdown if it's sleeping) so a reload never strands a turn.
+  const activateChatTasks = useCallback(async () => {
+    try {
+      const r = await fetch('/api/assistant/tasks', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = (await r.json()) as { tasks?: TaskStatusDto[] };
+      const live = d.tasks ?? [];
+      for (const t of live) markServerOwned(t.chatId);
+      const active = activeIdRef.current;
+      const cur = active ? live.find((t) => t.chatId === active) : undefined;
+      if (!cur || !active) return;
+      if (cur.status === 'running') {
+        void reattachResume(active);
+      } else if (cur.status === 'sleeping' && cur.wakeAt) {
+        // Re-arm the latest timer so the countdown shows and reattaches at wake.
+        lastSeqRef.current.set(active, cur.seq);
+        const wake = cur.wakeAt;
+        setItems((prev) => {
+          let lastTimer = -1;
+          prev.forEach((it, i) => {
+            if (it.kind === 'timer') lastTimer = i;
+          });
+          if (lastTimer < 0) return prev;
+          return prev.map((it, i) =>
+            i === lastTimer && it.kind === 'timer' ? { ...it, status: 'running', endsAt: wake } : it,
+          );
+        });
+      }
+    } catch {
+      /* offline — the stored transcript stands */
+    }
+  }, [reattachResume, markServerOwned]);
+
+  // Once chats are loaded, reattach the active chat's live task exactly once (a
+  // reload landing back on a running/sleeping turn picks it up automatically).
+  useEffect(() => {
+    if (!chatsLoaded || activatedRef.current) return;
+    activatedRef.current = true;
+    void activateChatTasks();
+  }, [chatsLoaded, activateChatTasks]);
+
+  // Operator chose to keep the timer waiting — just dismiss the prompt.
+  const keepTimer = useCallback(() => setTimerPrompt(null), []);
+
+  // Operator cancelled the wait: stop the whole task (which cancels the server's
+  // scheduled resume) and settle the countdown so the composer unlocks.
+  const cancelTimerTask = useCallback((id: string) => {
+    const chatId = activeIdRef.current;
     setItems((prev) =>
       prev.map((it) => (it.kind === 'timer' && it.id === id ? { ...it, status: 'stopped' } : it)),
     );
-  }, []);
+    if (chatId) {
+      unmarkServerOwned(chatId);
+      void fetch('/api/assistant/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId }),
+      }).catch(() => {
+        /* the timer is settled locally regardless */
+      });
+    }
+    setBusy(false);
+  }, [unmarkServerOwned]);
 
-  // A countdown reached zero without being paused — mark it done and re-invoke
-  // the assistant to check and continue (the widget guarantees this fires once
-  // and never after a Stop).
+  // A countdown reached zero: mark it done and reattach — the SERVER resumes the
+  // agent on its own (even if we were offline); this catches the resume live.
   const onTimerDone = useCallback(
-    (id: string, label: string) => {
+    (id: string) => {
       setItems((prev) =>
         prev.map((it) => (it.kind === 'timer' && it.id === id ? { ...it, status: 'done' } : it)),
       );
-      void send(`The "${label}" timer elapsed — continue.`);
+      const chatId = activeIdRef.current;
+      if (chatId) void reattachResume(chatId);
     },
-    [send],
+    [reattachResume],
   );
 
   // Resolve an inline (agent-mode) action awaiting Run/Skip.
@@ -1295,6 +1559,14 @@ export function AssistantSidebar({
                   disabled={busy}
                 >
                   <span className={styles.chatTitle}>{c.title || 'New chat'}</span>
+                  {liveChats.includes(c.id) ? (
+                    <span
+                      className={styles.chatLive}
+                      role="img"
+                      aria-label="Agent working"
+                      title="The agent is working on this chat"
+                    />
+                  ) : null}
                   <span className={`${styles.chatTime} mono`}>{timeAgo(c.updatedAt)}</span>
                 </button>
                 <button
@@ -1850,29 +2122,21 @@ export function AssistantSidebar({
         {timerPrompt ? (
           <div className={styles.timerPrompt} role="dialog" aria-label="Timer running">
             <span className={styles.timerPromptText}>
-              Timer running. Keep it and talk to the agent, or delete it?
+              The agent is waiting on a timer. Keep waiting, or cancel and stop it?
             </span>
             <div className={styles.timerPromptBtns}>
-              <button
-                type="button"
-                className={styles.timerKeep}
-                onClick={() => {
-                  setInterjecting(true);
-                  setTimerPrompt(null);
-                  requestAnimationFrame(() => inputRef.current?.focus());
-                }}
-              >
-                Keep &amp; talk
+              <button type="button" className={styles.timerKeep} onClick={keepTimer}>
+                Keep waiting
               </button>
               <button
                 type="button"
                 className={styles.timerDelete}
                 onClick={() => {
-                  stopTimer(timerPrompt);
+                  cancelTimerTask(timerPrompt);
                   setTimerPrompt(null);
                 }}
               >
-                Delete timer
+                Cancel timer
               </button>
             </div>
           </div>
@@ -1900,7 +2164,7 @@ export function AssistantSidebar({
               !effective
                 ? 'Add an API key first'
                 : timerLocks
-                  ? 'Timer running — press Stop to talk or cancel'
+                  ? 'Timer running — press Stop to cancel'
                   : 'Ask the lab…'
             }
             rows={1}

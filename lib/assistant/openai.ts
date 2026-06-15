@@ -155,6 +155,8 @@ export async function runOpenAiTurn(
         content: outcome.content,
       });
     }
+    // start_timer asked to end the turn and hand the wait to the task runner.
+    if (ctx.sleep) return;
   }
   emit({
     type: 'error',

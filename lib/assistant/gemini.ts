@@ -129,6 +129,8 @@ export async function runGeminiTurn(
       });
     }
     contents.push({ role: 'user', parts: responses });
+    // start_timer asked to end the turn and hand the wait to the task runner.
+    if (ctx.sleep) return;
   }
   emit({
     type: 'error',

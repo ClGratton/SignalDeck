@@ -105,12 +105,46 @@ ops, and never resolve a `reauth` id's 'run' without verifying credentials first
 
 ### Operator assistant (console sidebar)
 
-- `/api/console`, `/api/assistant`, `/api/assistant/execute`,
+- `/api/console`, `/api/assistant`, `/api/assistant/oneshot`,
+  `/api/assistant/stream`, `/api/assistant/tasks`, `/api/assistant/execute`,
   `/api/assistant/decide`, `/api/assistant/models`, `/api/assistant/keys`,
   `/api/assistant/memory`, `/api/assistant/chats`, `/api/assistant/workspace`
   are PRIVILEGED: every one starts with `hasValidSession()`. They serve/act on
   the rich operator data (guest names, datasets, sessions, HA entities, full chat
   transcripts, per-chat plans/notes) that the public aggregates deliberately omit.
+
+### Agent runs as a SERVER-SIDE TASK (survives disconnect) — never re-tie it to the request
+
+The agent loop runs as a background TASK (`lib/assistant/tasks.ts`), decoupled
+from the HTTP request that started it. This is load-bearing for the "complete the
+job whether or not I'm connected" guarantee — do not move execution back inside
+the request stream.
+
+- `POST /api/assistant` STARTS a task (keyed by `chatId`, one live per chat) and
+  returns a stream that merely SUBSCRIBES to it. A reload / closed tab / dropped
+  tunnel / logout only detaches the subscriber (`streamFrames` `cancel()` never
+  aborts the task). The task keeps running and finishes on its own.
+- `GET /api/assistant/stream?chatId&from=<seq>` REATTACHES: replays every frame
+  after `from`, then streams live. The wire format is `StreamFrame` (`{seq,
+  event}`) so a reconnecting client replays only what it missed. `GET
+  /api/assistant/tasks` reports live task status (so a reloaded client knows to
+  reattach); `POST` it stops a task (the ONLY thing that aborts one).
+- TIMERS are server-side: `start_timer` sets `ctx.sleep`, the provider loop
+  returns, and the task schedules its OWN wake-up and re-invokes the agent — so a
+  99-hour timer survives a reload/logout. The client countdown is just a mirror;
+  it must NOT drive the resume.
+- The task WRITES its turn into the shared chat store as it goes (`writeTaskChat`,
+  bypassing the store's live-task guard) so a fully detached operator still sees
+  the result. The client must NOT clobber a task-owned chat: `chat-store.ts`
+  guards it on the collection `PUT`, and the client omits server-owned chats from
+  its push (`serverOwnedRef`).
+- Non-terminal tasks are persisted (`data/assistant-tasks.json`, gitignored): a
+  SLEEPING timer reschedules after a restart/redeploy; a task that was mid-RUN at
+  a crash can't be resumed (you can't serialize a running async fn) and is marked
+  errored. Same single-instance limit as the login throttle.
+- `/api/assistant/oneshot` is the EPHEMERAL exception: a request-scoped turn (Ask
+  mode, raw events, dies with the request) for `/compact`, which has no durable
+  result. Don't route durable turns through it, or task survival is lost.
 - Chat history is centralized server-side (`data/assistant-chats.json`, gitignored;
   via `/api/assistant/chats`) so it is identical across browsers/devices — a
   single shared collection (single-user gate). localStorage is only a same-browser
