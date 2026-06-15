@@ -494,11 +494,28 @@ export function streamFrames(chatId: string, fromSeq: number): ReadableStream<Ui
   });
 }
 
-/** Stop a chat's task (operator pressed Stop). */
+/** Stop a chat's task (operator pressed Stop / cancelled a timer). */
 export function stopTask(chatId: string): boolean {
   const task = tasks.get(chatId);
   if (!task || isTerminal(task.status)) return false;
-  task.abort.abort();
+  // Always cancel a scheduled resume so a stopped timer can't fire later.
+  if (task.timer) {
+    clearTimeout(task.timer);
+    task.timer = undefined;
+  }
+  if (task.status === 'sleeping') {
+    // A SLEEPING task is NOT inside drive() (its turn already returned and is
+    // waiting on the timer above). An abort alone would neither settle it nor
+    // stop the resume — that's the bug behind "stop a timer, it comes back on
+    // reload" and "stuck at working after stop". Settle it HERE: mark the timer
+    // cancelled, emit a terminal frame (closes any reattached stream), finalize.
+    const t = [...task.items].reverse().find((it) => it.kind === 'timer' && it.status === 'running');
+    if (t && t.kind === 'timer') t.status = 'stopped';
+    emit(task, { type: 'done' });
+    finalize(task, 'done');
+  } else {
+    task.abort.abort(); // running: drive()'s abort branch finalizes it
+  }
   return true;
 }
 

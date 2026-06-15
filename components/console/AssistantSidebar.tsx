@@ -87,7 +87,10 @@ const MODE_KEY = 'grtlabs:assistant-mode';
 const APPROVAL_KEY = 'grtlabs:assistant-approval';
 const LEGACY_ACTIONS_KEY = 'grtlabs:assistant-actions';
 const MAX_CHATS = 30;
-const MAX_ITEMS = 300;
+// Keep the FULL chat scrollable — a long agent run produces many tool/action
+// rows, and capping low silently dropped the start of the conversation. Matches
+// the server store cap (MAX_ITEMS_PER_CHAT) so nothing is lost between them.
+const MAX_ITEMS = 1000;
 // Default target for /compact when no percentage is given.
 const DEFAULT_COMPACT_PCT = 25;
 

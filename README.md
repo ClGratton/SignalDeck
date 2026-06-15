@@ -54,13 +54,35 @@ secret to the browser is a re-auth-gated reveal route (fresh password + TOTP).
 `/api/status`, `/api/traffic`, `/api/history` return non-identifying aggregates
 only. Anything richer requires a session.
 
-### 3. Sessions
-Token = HMAC-SHA256 over `g.<epoch>.<issuedAt>`; `httpOnly`, `sameSite=lax`,
-`secure` in production, 7-day max age. An embedded epoch is checked on every
+### 3. Sessions — token + an active-session registry
+Token = HMAC-SHA256 over `g.<epoch>.<sessionId>.<issuedAt>`; `httpOnly`,
+`sameSite=lax`, `secure` in production. An embedded epoch is checked on every
 verify, so "sign out everywhere" invalidates all sessions at once. Login itself
 is throttle-first (per-IP exponential backoff + global breaker), constant-time
 password compare, single-use replay-guarded TOTP, and a single generic error
 that never reveals which factor was wrong.
+
+The `sessionId` keys a server-side **session registry** that adds what a
+stateless token can't, all tunable in **Settings → Security & sessions**:
+- **Rolling idle timeout** — refreshed on every request, so active use never
+  expires; a session lapses only after N idle minutes (0 = off).
+- **Absolute max age** — a hard ceiling regardless of activity.
+- **Concurrent-session limit** — at most N devices; a new login evicts the
+  least-recently-active (limit 1 ⇒ signing in on a phone drops the desktop). A
+  live device list lets you revoke any session on demand.
+- **Login 2FA toggle** — turn the login code on/off (the destructive-action
+  re-auth gate still uses TOTP regardless).
+
+Enforcement is split for safety: the **middleware stays edge-safe** and verifies
+only the token (signature + epoch); the registry's idle/absolute/concurrent
+rules + the activity heartbeat run in `hasValidSession()`, which the dashboard
+page and every privileged route call.
+
+**QR cross-device login** — an already-signed-in desktop shows a QR encoding a
+single-use, ~60-second token bound to its session; the token rides in the URL
+*fragment* (never sent to a server). A phone scans it, confirms "sign in from
+*&lt;device&gt;*?", and redeems it for its own session — no password typed on the
+phone, and the code can't be replayed.
 
 ### 4. Credential privilege split — dashboard (read) vs agent (write)
 Backend tokens come in two tiers, selected **per code path**:
@@ -149,14 +171,28 @@ The assistant keeps lab knowledge where it stays correct:
    checklist the model builds for *long* multi-step tasks. Shown to the operator
    as a pinned card and never written to global memory.
 
+### Runs on the server, not in your tab
+A turn runs as a **server-side task**, decoupled from the request that started
+it — so a reload, a closed tab, a dropped tunnel, or a logout no longer aborts
+it. The task finishes on its own and writes its result to the shared chat store;
+the browser just *attaches* to its event stream and can detach and reattach
+freely (replaying only what it missed). Concretely:
+- **Survives disconnect** — close the laptop mid-task and the agent keeps going;
+  reopen and the finished answer is waiting.
+- **Server-side timers** — an ETA countdown is owned by the server, which
+  re-invokes the agent when it elapses, so a multi-hour wait survives a reload or
+  logout (and reschedules across a redeploy). The composer locks while it runs;
+  **Stop** cancels the task (the timer can't resurrect on reload).
+- **Concurrent chats** — independent tasks run in parallel; the chat list shows a
+  pulsing dot next to any chat the agent is still working.
+
 ### Other features
 - **Skills** — client-side slash commands. `/compact [%]` rewrites the transcript
   into a tight brief to shrink context (`/compact 10` → ~10%).
-- **ETA timers** — when a step needs to wait, the model sets a live countdown;
-  the composer locks while it runs, you can interject (keep the timer and talk)
-  or delete it, and on elapse the agent auto-resumes.
-- **Context wheel** — a usage pill by the model chip; hover shows the estimated
-  share of the model's window in use.
+- **Context wheel** — a usage pill by the model chip; hover shows the share of
+  the model's window in use, using the provider's **real** context window where
+  its API exposes it (Gemini `inputTokenLimit`, some OpenAI-compatible
+  `context_length`), falling back to a heuristic otherwise.
 - **Providers** — Anthropic, Gemini, and OpenAI-compatible (OpenAI / DeepSeek /
   GLM). Model keys are server-only and write-only; the client learns at most
   which provider is configured.

@@ -36,7 +36,10 @@ export interface ChatCollection {
 
 const FILE = path.join(process.cwd(), 'data', 'assistant-chats.json');
 const MAX_CHATS = 50;
-const MAX_ITEMS_PER_CHAT = 400;
+// Keep the whole transcript so the operator can scroll to the start of a long
+// agent run (matches the client's MAX_ITEMS). The JSON size guard below is the
+// real runaway-growth backstop.
+const MAX_ITEMS_PER_CHAT = 1000;
 // A guard against a runaway client filling the disk — not a hard product limit.
 const MAX_JSON_CHARS = 4_000_000;
 
