@@ -2136,9 +2136,11 @@ function TimerWidget({
     return () => window.clearInterval(t);
   }, [status, endsAt, id, label, onDone]);
 
-  const mm = Math.floor(remaining / 60);
+  const pad2 = (n: number) => n.toString().padStart(2, '0');
+  const hh = Math.floor(remaining / 3600);
+  const mm = Math.floor((remaining % 3600) / 60);
   const ss = remaining % 60;
-  const clock = `${mm}:${ss.toString().padStart(2, '0')}`;
+  const clock = hh > 0 ? `${hh}:${pad2(mm)}:${pad2(ss)}` : `${mm}:${pad2(ss)}`;
   const stateWord =
     status === 'running' ? clock : status === 'done' ? 'continued' : 'paused';
 

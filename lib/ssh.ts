@@ -16,8 +16,15 @@ import 'server-only';
 import { Client } from 'ssh2';
 import { cfg } from '@/lib/service-config';
 
-const TIMEOUT_MS = 15_000;
 const MAX_OUTPUT = 8000;
+
+// A cold SSH connect from a container to the Proxmox node plus `pct exec` can be
+// slow; 15s was too tight. Configurable via SSH_TIMEOUT (seconds), default 30,
+// clamped 5–300.
+function sshTimeoutMs(): number {
+  const s = Number(cfg('SSH_TIMEOUT'));
+  return (Number.isFinite(s) && s > 0 ? Math.min(Math.max(s, 5), 300) : 30) * 1000;
+}
 
 export function sshConfigured(): boolean {
   return !!cfg('SSH_HOST') && !!cfg('SSH_USER') && !!(cfg('SSH_PASSWORD') || cfg('SSH_PRIVATE_KEY'));
@@ -37,6 +44,7 @@ export function sshRun(command: string, hostOverride?: string): Promise<{ ok: bo
     return Promise.resolve({ ok: false, detail: 'SSH is not configured (set host, user, and a password or key in Settings).' });
   }
 
+  const timeoutMs = sshTimeoutMs();
   return new Promise((resolve) => {
     const conn = new Client();
     let settled = false;
@@ -53,7 +61,7 @@ export function sshRun(command: string, hostOverride?: string): Promise<{ ok: bo
       }
       resolve(r);
     };
-    const timer = setTimeout(() => done({ ok: false, detail: 'SSH command timed out.' }), TIMEOUT_MS);
+    const timer = setTimeout(() => done({ ok: false, detail: 'SSH command timed out.' }), timeoutMs);
 
     conn.on('ready', () => {
       conn.exec(command, (err, stream) => {
@@ -89,7 +97,7 @@ export function sshRun(command: string, hostOverride?: string): Promise<{ ok: bo
         port,
         username: user,
         ...(privateKey ? { privateKey } : { password }),
-        readyTimeout: TIMEOUT_MS,
+        readyTimeout: timeoutMs,
         // Self-hosted lab hosts; host-key pinning is out of scope here.
         algorithms: undefined,
       });

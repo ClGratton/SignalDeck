@@ -59,6 +59,7 @@ export const SERVICE_FIELDS: ServiceField[] = [
   { name: 'SSH_USER', label: 'User', group: 'Shell (SSH)', secret: false, placeholder: 'root', privilegedForActions: true },
   { name: 'SSH_PASSWORD', label: 'Password (or use a key)', group: 'Shell (SSH)', secret: true },
   { name: 'SSH_PRIVATE_KEY', label: 'Private key (PEM, overrides password)', group: 'Shell (SSH)', secret: true },
+  { name: 'SSH_TIMEOUT', label: 'Command timeout (seconds, default 30)', group: 'Shell (SSH)', secret: false, placeholder: '30' },
   // How many tool steps the agent may take in ONE turn before it pauses and asks
   // you to continue. Higher = longer autonomous runs before a checkpoint.
   { name: 'ASSISTANT_MAX_STEPS', label: 'Agent steps per turn (default 60)', group: 'Assistant', secret: false, placeholder: '60' },

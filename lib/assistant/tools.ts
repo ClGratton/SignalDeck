@@ -173,11 +173,11 @@ const READ_TOOLS: ToolDef[] = [
   {
     name: 'start_timer',
     description:
-      'When the task needs to WAIT before the next step — a job/backup to finish, a service to restart and come back, a sync to settle, any "check again in a bit" — ESTIMATE how long (seconds) and call this INSTEAD of looping, sleeping, or guessing. It shows the operator a live countdown and ENDS your turn; you are automatically re-invoked when it elapses to check and continue. The operator can pause it to ask you something. Give a realistic ETA; if it still is not ready when you resume, set another timer. Do not call other tools after this in the same turn.',
+      'When the task needs to WAIT before the next step — a job/backup to finish, a service to restart and come back, a sync to settle, any "check again in a bit" — ESTIMATE how long (seconds) and call this INSTEAD of looping, sleeping, or guessing. It shows the operator a live countdown and ENDS your turn; you are automatically re-invoked when it elapses to check and continue. The operator can pause it to ask you something. Give a realistic ETA; if it still is not ready when you resume, set another timer. The max is 356400 seconds (99 hours) — use it for genuinely long waits (a multi-hour scrub/resilver/backup) rather than chaining many short timers. Do not call other tools after this in the same turn.',
     input_schema: {
       type: 'object',
       properties: {
-        seconds: { type: 'integer', description: 'How long to wait, 1–3600 seconds.' },
+        seconds: { type: 'integer', description: 'How long to wait, 1 to 356400 seconds (up to 99 hours).' },
         reason: {
           type: 'string',
           description: 'Short label shown on the countdown, e.g. "waiting for the gravity update to finish".',
@@ -619,7 +619,7 @@ export async function executeTool(
     case 'start_timer': {
       let secs = int(args.seconds);
       if (Number.isNaN(secs)) secs = 0;
-      secs = Math.min(Math.max(secs, 1), 3600);
+      secs = Math.min(Math.max(secs, 1), 356400); // up to 99 hours
       const reason = str(args.reason) || 'waiting';
       ctx.emit({ type: 'timer', id: randomUUID(), seconds: secs, label: reason });
       return {

@@ -35,8 +35,10 @@ WebSocket (path has NO leading slash = the command type, body = the rest of the 
 - "config/entity_registry/list" ; "config/entity_registry/remove" body {"entity_id":"sensor.x"} — delete one orphaned entity.
 - "config/device_registry/list" ; "config/area_registry/list".
 
-## truenas  (JSON-RPC 2.0; path = method, body = params array)
-- pool.query , pool.dataset.query , disk.temperatures , app.query/app.start/app.stop , replication.run
+## truenas  (JSON-RPC 2.0; path = method, body = the POSITIONAL PARAMS ARRAY — not an object)
+- The body MUST be the params array. Query methods take a FILTERS LIST as the first param: body \`[[]]\` = all rows; \`[[["name","=","datapool"]]]\` = filtered; an options dict can be the 2nd element: \`[[], {"extra": {...}}]\`. Passing an object like \`{"id":1}\` FAILS with -32602 "filters: Input should be a valid list".
+- Reads: pool.query (body \`[[]]\`), pool.dataset.query (body \`[[]]\`), disk.temperatures (body \`[]\`), system.info (body \`[]\`), app.query. Acts: app.start/app.stop, replication.run, pool.scrub.update (takes \`[id, {data}]\`).
+- A -32601 "Method does not exist" means the method NAME is wrong (you guessed) — don't retry the same name; inspect with a known method or correct the name.
 
 ## jellyfin  (REST)
 - GET /System/Info , GET /Sessions , GET /Items?... , POST /Items/{id}/...
