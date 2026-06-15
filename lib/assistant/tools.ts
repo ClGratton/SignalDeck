@@ -417,9 +417,12 @@ function shellCommandCritical(command: string): boolean {
 // The DESTRUCTIVE BLACKLIST — a deliberately SMALL set of the most irreversible
 // shapes that ALWAYS require a fresh re-auth (a 30-min elevation window),
 // regardless of approval mode (a hard floor even in 'auto'). Matched on the
-// action's detail string: HTTP DELETE, RPC .delete/.destroy, rm -rf, wipe/
-// format/mkfs. Everything else keeps its normal mode/approval behavior.
-const HIGH_RISK = /\b(destroy|delete|wipe|format|mkfs|wipefs)\b|\brm\s+-\w*[rf]/i;
+// action's detail string: HTTP DELETE, RPC .delete/.destroy, rm -rf, and disk
+// wipe/format (mkfs/wipefs). Everything else keeps its normal mode/approval
+// behavior. The list stays tight to avoid flagging benign reads: `format` is
+// NOT a word here on purpose — it's the `--format` display flag far more often
+// than a disk wipe, and real formatting is mkfs/wipefs anyway.
+const HIGH_RISK = /\b(destroy|delete|wipe|mkfs|wipefs)\b|\brm\s+-\w*[rf]/i;
 function isHighRiskAction(detail: string): boolean {
   return HIGH_RISK.test(detail);
 }

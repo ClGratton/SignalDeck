@@ -196,8 +196,11 @@ export function TelemetryCanvas() {
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      // A soft background doesn't need 2× — cap lower to cut the pixel/blur work.
-      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      // A soft, blurry background doesn't need HiDPI: render at 1 device pixel
+      // per CSS pixel and let the browser upscale. This is the biggest GPU win —
+      // it roughly halves the per-frame texture the compositor uploads — and is
+      // visually indistinguishable on faint waves.
+      dpr = Math.min(window.devicePixelRatio || 1, 1);
       width = Math.max(1, rect.width);
       height = Math.max(1, rect.height);
       canvas.width = Math.round(width * dpr);
@@ -357,8 +360,9 @@ export function TelemetryCanvas() {
     let raf = 0;
     // Cap the render rate. A slow ambient scene doesn't need 60fps, and on a
     // 120/144Hz display the uncapped loop did 2–2.4× the work for no visible gain
-    // — that, plus per-packet shadowBlur, is what cooked the GPU.
-    const FRAME_MS = 1000 / 30;
+    // — that, plus per-packet shadowBlur, is what cooked the GPU. 45 reads
+    // smoother than 30 while still well under a high-refresh display's rate.
+    const FRAME_MS = 1000 / 45;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       if (lastNow !== 0 && now - lastNow < FRAME_MS) return;

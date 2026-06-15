@@ -84,7 +84,7 @@ which code holds which.
 
 ### 6. Destructive-action re-auth gate (blacklist + 30-min elevation)
 A small blacklist of the most irreversible shapes — `destroy / delete / wipe /
-format / mkfs / rm -rf`, matched on the action detail — **always** requires a
+mkfs / wipefs / rm -rf`, matched on the action detail — **always** requires a
 fresh re-auth (password + TOTP) before running, regardless of the approval mode
 (a hard floor even in autonomous mode). A success opens a **~30-minute elevation
 window** during which further destructive actions run without re-prompting — so
@@ -111,7 +111,11 @@ the **operator's approval**, not a narrow tool menu.
   own base URL + auth + transport. `guest_power` and `ha_service` are convenience
   wrappers; `run_shell` runs commands over SSH (e.g. `pct exec`) for what no API
   covers; `list_ha_entities` / `read_reference` round it out.
-- The executable closure for any action **never leaves the server**.
+- **The model never sees the backend secret.** It supplies only
+  `service / method / path / body` — never a credential. The server attaches the
+  token to the outgoing request itself, so the API secret is in neither the
+  tool's input nor its result (which is just the response data + status). The
+  executable closure for any action **never leaves the server**.
 
 ### Modes & approval
 - **Ask** — advise and *propose*; calling an action registers a one-click

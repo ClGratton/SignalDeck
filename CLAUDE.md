@@ -60,7 +60,7 @@ elevation gate below. Layered, no VPN required:
 ### Destructive-action re-auth gate (blacklist + 30-min elevation)
 
 A deliberately SMALL blacklist of the most irreversible action shapes —
-`destroy / delete / wipe / format / mkfs / rm -rf`, matched on the action detail
+`destroy / delete / wipe / mkfs / wipefs / rm -rf`, matched on the action detail
 in `isHighRiskAction()` (`lib/assistant/tools.ts`) — ALWAYS requires a fresh
 re-auth (password + TOTP), independent of the approval mode (a hard floor even in
 `auto`). It REPLACES the normal confirm for those actions: `dispatchAction` emits

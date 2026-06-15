@@ -72,6 +72,21 @@ push webhook and pulls the code.
 - Keep it a **single instance** — the login throttle and TOTP replay guard are
   per-process by design; don't scale to 2+ without a shared store.
 
+> **If the Coolify panel (`coolify.grtlabs.xyz`) is behind Cloudflare Access:**
+> the GitHub push webhook is an automated, non-browser request, so the Access
+> login wall blocks it and auto-deploy silently stops firing. Fix it with a
+> **path-scoped Bypass** Access application that lets only the webhook/deploy
+> paths through while the panel UI stays gated:
+>
+> - App name: `Coolify Git Webhooks Public`
+> - Action **Bypass**, Include **Everyone**
+> - Paths: `coolify.grtlabs.xyz/webhooks/*` and `coolify.grtlabs.xyz/api/v1/deploy*`
+>
+> The panel itself stays under the admin-email policy. These two paths are safe
+> to bypass Access because Coolify still authenticates them with its own webhook
+> secret / deploy token — the bypass removes only the *identity* wall, not
+> Coolify's own auth.
+
 ---
 
 ## 4. Environment variables (the old `.env.local`)
