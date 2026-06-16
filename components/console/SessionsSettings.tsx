@@ -96,8 +96,11 @@ export function SessionsSettings() {
     try {
       const res = await fetch('/api/auth/handoff', { method: 'POST' });
       if (res.ok) {
-        const d = (await res.json()) as QrState;
-        setQr(d);
+        // The route returns the SVG under `qrSvg`; map it onto QrState.svg (a
+        // mismatch here is what left the QR box blank — the timer still ran
+        // because `expiresAt`/`code` matched).
+        const d = (await res.json()) as { qrSvg: string; code: string; expiresAt: number };
+        setQr({ svg: d.qrSvg, code: d.code, expiresAt: d.expiresAt });
         setNow(Date.now());
       }
     } catch {
