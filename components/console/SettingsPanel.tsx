@@ -7,7 +7,7 @@
 // the re-auth reveal (eye). Saving writes a runtime override that beats
 // .env.local on the next probe; clearing a field falls back to env.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, EyeOff, ShieldAlert, X } from 'lucide-react';
 import { useReveal } from './RevealProvider';
 import { AssistantSettings } from './AssistantSettings';
@@ -24,7 +24,18 @@ interface FieldDto {
   source: 'override' | 'env' | null;
   /** Present for non-secret fields only — shown/edited directly. */
   value?: string;
+  /** Control hint: a switch (boolean) or a slider+number (numeric). */
+  control?: 'toggle' | 'slider';
+  boolDefault?: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
+  numDefault?: number;
+  zeroLabel?: string;
 }
+
+const isTruthy = (v: string | undefined): boolean => /^(true|1|yes|on)$/i.test((v ?? '').trim());
 
 type Draft = { value: string; revealed: boolean; dirty: boolean; saving?: boolean; saved?: boolean };
 
@@ -102,6 +113,16 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     }
   }, []);
 
+  // Optimistic commit for the toggle/slider controls: reflect the new value in
+  // the UI immediately, then persist (saveValue reconciles source on success).
+  const commitValue = useCallback(
+    (name: string, value: string) => {
+      setFields((fs) => fs?.map((x) => (x.name === name ? { ...x, value } : x)) ?? fs);
+      void saveValue(name, value);
+    },
+    [saveValue],
+  );
+
   const onSave = async (f: FieldDto) => {
     const d = drafts[f.name];
     if (!d || !d.dirty) return;
@@ -125,22 +146,67 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     }
   };
 
+  // The label header (name + privileged icon + source pill) shared by every
+  // control variant. `htmlFor` only applies to the text input variant.
+  const fieldHeader = (f: FieldDto, htmlFor?: string) => (
+    <label className={styles.fieldLabel} htmlFor={htmlFor}>
+      <span className={styles.fieldName}>
+        {f.label}
+        {f.privilegedForActions ? (
+          <ShieldAlert size={12} strokeWidth={2.4} aria-hidden className={styles.privIcon} />
+        ) : null}
+      </span>
+      <span className={`${styles.source} mono`} data-src={f.source ?? 'none'}>
+        {f.source ?? 'not set'}
+      </span>
+    </label>
+  );
+
   const renderField = (f: FieldDto) => {
+    // Boolean → switch. Reads the effective value (override or env), falling back
+    // to the code default when nothing is set; saves 'true'/'false' on flip.
+    if (f.control === 'toggle') {
+      const on = f.value != null ? isTruthy(f.value) : !!f.boolDefault;
+      return (
+        <div key={f.name} className={styles.field}>
+          {fieldHeader(f)}
+          <div className={styles.toggleRow}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={on}
+              aria-label={f.label}
+              className={styles.toggle}
+              data-on={on || undefined}
+              onClick={() => commitValue(f.name, on ? 'false' : 'true')}
+            >
+              <span className={styles.toggleThumb} />
+            </button>
+            <span className={styles.toggleState}>{on ? 'On' : 'Off'}</span>
+          </div>
+        </div>
+      );
+    }
+
+    // Numeric → slider + custom number box (the box accepts values past max).
+    if (f.control === 'slider') {
+      const current =
+        f.value != null && f.value !== '' && Number.isFinite(Number(f.value))
+          ? Number(f.value)
+          : (f.numDefault ?? f.min ?? 0);
+      return (
+        <div key={f.name} className={styles.field}>
+          {fieldHeader(f)}
+          <SliderField field={f} initial={current} onCommit={(v) => commitValue(f.name, v)} />
+        </div>
+      );
+    }
+
     const d = drafts[f.name] ?? { value: '', revealed: false, dirty: false };
     const masked = f.secret && !d.revealed;
     return (
       <div key={f.name} className={styles.field}>
-        <label className={styles.fieldLabel} htmlFor={`set-${f.name}`}>
-          <span className={styles.fieldName}>
-            {f.label}
-            {f.privilegedForActions ? (
-              <ShieldAlert size={12} strokeWidth={2.4} aria-hidden className={styles.privIcon} />
-            ) : null}
-          </span>
-          <span className={`${styles.source} mono`} data-src={f.source ?? 'none'}>
-            {f.source ?? 'not set'}
-          </span>
-        </label>
+        {fieldHeader(f, `set-${f.name}`)}
         <div className={styles.inputRow}>
           <input
             id={`set-${f.name}`}
@@ -244,6 +310,93 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** A slider for a numeric setting, with a custom number box on the right. The
+ *  slider is clamped to [min,max]; the number box accepts values PAST max (it
+ *  just pins the slider at the end), so an owner can exceed a sensible ceiling
+ *  on purpose. Saves are debounced so dragging doesn't hammer the endpoint. */
+function SliderField({
+  field,
+  initial,
+  onCommit,
+}: {
+  field: FieldDto;
+  initial: number;
+  onCommit: (value: string) => void;
+}) {
+  const min = field.min ?? 0;
+  const max = field.max ?? 100;
+  const step = field.step ?? 1;
+  const [val, setVal] = useState(initial);
+  const [text, setText] = useState(String(initial));
+  const saveTimer = useRef<number | null>(null);
+
+  // Re-seed if the canonical value changes underneath us (another save landed).
+  useEffect(() => {
+    setVal(initial);
+    setText(String(initial));
+  }, [initial]);
+
+  const scheduleSave = (n: number) => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => onCommit(String(n)), 350);
+  };
+
+  const onSlider = (raw: number) => {
+    setVal(raw);
+    setText(String(raw));
+    scheduleSave(raw);
+  };
+
+  // On blur/Enter: parse, floor at min, allow above max (stored as typed).
+  const commitText = () => {
+    const n = Number(text);
+    if (!Number.isFinite(n)) {
+      setText(String(val));
+      return;
+    }
+    const next = Math.max(min, n);
+    setVal(next);
+    setText(String(next));
+    scheduleSave(next);
+  };
+
+  const sliderVal = Math.min(max, Math.max(min, val));
+
+  return (
+    <div className={styles.sliderRow}>
+      <input
+        type="range"
+        className={styles.slider}
+        min={min}
+        max={max}
+        step={step}
+        value={sliderVal}
+        onChange={(e) => onSlider(Number(e.target.value))}
+        aria-label={field.label}
+      />
+      <div className={styles.sliderNum}>
+        <input
+          type="number"
+          className={styles.numInput}
+          value={text}
+          min={min}
+          step={step}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commitText}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          }}
+          aria-label={`${field.label} value`}
+        />
+        {field.unit ? <span className={styles.sliderUnit}>{field.unit}</span> : null}
+      </div>
+      {field.zeroLabel && val === 0 ? (
+        <span className={styles.sliderHint}>{field.zeroLabel}</span>
+      ) : null}
     </div>
   );
 }

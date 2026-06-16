@@ -19,6 +19,15 @@ export async function GET() {
     secret: f.secret,
     placeholder: f.placeholder,
     privilegedForActions: f.privilegedForActions === true,
+    // Control hints for the panel (toggle / slider) — all non-sensitive metadata.
+    control: f.control,
+    boolDefault: f.boolDefault,
+    min: f.min,
+    max: f.max,
+    step: f.step,
+    unit: f.unit,
+    numDefault: f.numDefault,
+    zeroLabel: f.zeroLabel,
     source: fieldSource(f.name),
     // Non-secret values (host URLs, ports, zone ids, step cap) are safe to show
     // the authenticated operator directly — no eye/re-auth dance for a hostname.

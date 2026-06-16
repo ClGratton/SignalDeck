@@ -254,6 +254,146 @@
   cursor: default;
 }
 
+/* ── Toggle switch (boolean settings) ───────────────────────────────────────── */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.toggle {
+  position: relative;
+  flex: 0 0 auto;
+  width: 2.6rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease-out-quint),
+    border-color var(--dur) var(--ease-out-quint);
+}
+.toggle[data-on] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.toggleThumb {
+  position: absolute;
+  top: 50%;
+  left: 0.18rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  transform: translate(0, -50%);
+  transition: transform var(--dur) var(--ease-out-quint);
+}
+.toggle[data-on] .toggleThumb {
+  transform: translate(1.1rem, -50%);
+  background: var(--on-accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .toggle,
+  .toggleThumb {
+    transition: none;
+  }
+}
+.toggleState {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* ── Slider + custom number box (numeric settings) ──────────────────────────── */
+.sliderRow {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.slider {
+  flex: 1;
+  min-width: 0;
+  height: 1.5rem;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.slider::-webkit-slider-runnable-track {
+  height: 0.32rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.slider::-moz-range-track {
+  height: 0.32rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.slider::-webkit-slider-thumb {
+  appearance: none;
+  margin-top: -0.42rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.slider::-moz-range-thumb {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.slider:focus-visible {
+  outline: none;
+}
+.slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 28%, transparent);
+}
+.slider:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 28%, transparent);
+}
+.sliderNum {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+}
+.numInput {
+  width: 4.2rem;
+  padding: 0.4rem 0.5rem;
+  font-size: var(--text-sm);
+  text-align: right;
+  color: var(--ink-strong);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.numInput:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.sliderUnit {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.sliderHint {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent-ink);
+  flex: 0 0 auto;
+}
+
 /* ── Assistant tab extras (keys + multiplier dropdown) ──────────────────────── */
 .assistantExtras {
   display: flex;
