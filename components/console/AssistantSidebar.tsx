@@ -279,7 +279,10 @@ function buildHistory(items: Item[]): ChatTurn[] {
     } else if (it.kind === 'timer' && it.status !== 'running') {
       raw.push({
         role: 'user',
-        content: `(waited for: ${it.label}${it.status === 'stopped' ? ' — paused by operator' : ''})`,
+        content:
+          it.status === 'stopped'
+            ? `(operator STOPPED the "${it.label}" timer — do NOT start another timer for this unless they explicitly ask again)`
+            : `(waited for: ${it.label})`,
       });
     }
   }
@@ -490,8 +493,18 @@ export function AssistantSidebar({
         chatsRef.current.push(chat);
         activeIdRef.current = chat.id;
       }
+      // Only advance updatedAt when the CONTENT actually changed. flush() also
+      // runs on a no-op (switching away from a chat, opening the list), and
+      // bumping the timestamp then made a merely-viewed chat jump to the top of
+      // history. The transcript is append-only, so a length change or a different
+      // last item is a reliable "something new happened" signal.
+      const prev = chat.items;
+      const last = liveItems[liveItems.length - 1];
+      const changed =
+        prev.length !== liveItems.length ||
+        JSON.stringify(prev[prev.length - 1]) !== JSON.stringify(last);
       chat.items = liveItems.slice(-MAX_ITEMS);
-      chat.updatedAt = now;
+      if (changed) chat.updatedAt = now;
       const firstUser = liveItems.find((i) => i.kind === 'user');
       chat.title = (firstUser?.kind === 'user' ? firstUser.text : 'New chat').slice(0, 60);
       if (chatsRef.current.length > MAX_CHATS) {
@@ -1329,16 +1342,26 @@ export function AssistantSidebar({
       if (!r.ok) return;
       const d = (await r.json()) as { tasks?: TaskStatusDto[] };
       const live = d.tasks ?? [];
+      // Reconcile ownership against the SERVER's authoritative live set: mark the
+      // chats it reports live, and DROP any we still think are owned but it no
+      // longer lists (the task finished / was stopped while we were detached).
+      const liveIds = new Set(live.map((t) => t.chatId));
       for (const t of live) markServerOwned(t.chatId);
+      for (const id of [...serverOwnedRef.current]) {
+        if (!liveIds.has(id)) unmarkServerOwned(id);
+      }
       const active = activeIdRef.current;
-      const cur = active ? live.find((t) => t.chatId === active) : undefined;
-      if (!cur || !active) return;
-      if (cur.status === 'running') {
+      if (!active) return;
+      const cur = live.find((t) => t.chatId === active);
+      if (cur && cur.status === 'running') {
         void reattachResume(active);
-      } else if (cur.status === 'sleeping' && cur.wakeAt) {
+        return;
+      }
+      if (cur && cur.status === 'sleeping' && cur.wakeAt) {
         // Re-arm the latest timer so the countdown shows and reattaches at wake.
         lastSeqRef.current.set(active, cur.seq);
         const wake = cur.wakeAt;
+        setBusy(false); // a sleeping turn is the timer's lock, not the busy spinner
         setItems((prev) => {
           let lastTimer = -1;
           prev.forEach((it, i) => {
@@ -1349,11 +1372,23 @@ export function AssistantSidebar({
             i === lastTimer && it.kind === 'timer' ? { ...it, status: 'running', endsAt: wake } : it,
           );
         });
+        return;
       }
+      // No live task for the active chat. The server is authoritative, so settle
+      // any stale 'running' timer item (left over from a turn that was sleeping
+      // when the transcript was persisted) and clear busy — otherwise the
+      // composer stays stuck showing "working"/"Stop" for a turn that's over.
+      setBusy(false);
+      setItems((prev) => {
+        if (!prev.some((it) => it.kind === 'timer' && it.status === 'running')) return prev;
+        return prev.map((it) =>
+          it.kind === 'timer' && it.status === 'running' ? { ...it, status: 'stopped' } : it,
+        );
+      });
     } catch {
       /* offline — the stored transcript stands */
     }
-  }, [reattachResume, markServerOwned]);
+  }, [reattachResume, markServerOwned, unmarkServerOwned]);
 
   // Once chats are loaded, reattach the active chat's live task exactly once (a
   // reload landing back on a running/sleeping turn picks it up automatically).

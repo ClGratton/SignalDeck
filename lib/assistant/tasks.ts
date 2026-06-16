@@ -245,7 +245,10 @@ function turnsFromItems(items: ProjItem[]): ChatTurn[] {
     } else if (it.kind === 'timer' && it.status !== 'running') {
       raw.push({
         role: 'user',
-        content: `(waited for: ${it.label}${it.status === 'stopped' ? ' — paused by operator' : ''})`,
+        content:
+          it.status === 'stopped'
+            ? `(operator STOPPED the "${it.label}" timer — do NOT start another timer for this unless they explicitly ask again)`
+            : `(waited for: ${it.label})`,
       });
     }
   }
@@ -521,17 +524,22 @@ export function stopTask(chatId: string): boolean {
 
 export function liveTaskStatus(chatId: string): TaskStatusDto | null {
   const task = tasks.get(chatId);
-  if (!task) return null;
+  // A terminal task is retained briefly so a reloading client can replay its
+  // tail, but it is NOT live — reporting it as such would leave a stale "working"
+  // dot and re-lock the composer for a finished turn. Treat terminal as absent.
+  if (!task || isTerminal(task.status)) return null;
   return { chatId, status: task.status, seq: task.seq, wakeAt: task.wakeAt };
 }
 
 export function liveTaskStatuses(): TaskStatusDto[] {
-  return [...tasks.values()].map((t) => ({
-    chatId: t.chatId,
-    status: t.status,
-    seq: t.seq,
-    wakeAt: t.wakeAt,
-  }));
+  return [...tasks.values()]
+    .filter((t) => !isTerminal(t.status)) // exclude retained-but-finished tasks
+    .map((t) => ({
+      chatId: t.chatId,
+      status: t.status,
+      seq: t.seq,
+      wakeAt: t.wakeAt,
+    }));
 }
 
 // ── Persistence (best-effort; resumes sleeping timers across a restart) ──────
