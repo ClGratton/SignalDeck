@@ -122,13 +122,30 @@ export function createSession(label: string, ip: string): string {
   prune(now);
   const list = load();
   const id = randomUUID();
-  list.push({ id, issuedAt: now, lastSeen: now, label: label.slice(0, 80), ip: ip.slice(0, 64) });
+  const rec: SessionRecord = {
+    id,
+    issuedAt: now,
+    lastSeen: now,
+    label: label.slice(0, 80),
+    ip: ip.slice(0, 64),
+  };
   const limit = maxSessions();
-  if (limit > 0 && list.length > limit) {
-    // Evict the oldest by activity until within the limit (keep the new one).
-    list.sort((a, b) => b.lastSeen - a.lastSeen);
-    mem = list.slice(0, limit);
+  if (limit > 0 && list.length >= limit) {
+    // Over (or at) the cap: evict the least-recently-active EXISTING sessions to
+    // make room, but ALWAYS keep the one we're creating now. The old code sorted
+    // ALL sessions (new included) by lastSeen and kept the top N — so a still-
+    // active OTHER device (its lastSeen is also ≈now, often fresher) would evict
+    // this brand-new login, handing the user a cookie for a session that doesn't
+    // exist in the registry. That locked them out the instant they signed in
+    // (every privileged request 401s, /dashboard ping-pongs to /login). Keep the
+    // newest device explicitly; with limit 1 this means "new device drops old".
+    const keepOthers = list
+      .slice()
+      .sort((a, b) => b.lastSeen - a.lastSeen)
+      .slice(0, Math.max(0, limit - 1));
+    mem = [...keepOthers, rec];
   } else {
+    list.push(rec);
     mem = list;
   }
   persist(true);
