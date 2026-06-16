@@ -1189,6 +1189,15 @@ export function AssistantSidebar({
           if (activeIdRef.current === chatId) setBusy(false);
           return;
         }
+        // Operator pressed Stop: pumpStream caught the abort and reported a close.
+        // This is a DELIBERATE stop, not a network blip — settle in place WITHOUT
+        // reloading from the server. The live transcript is already on screen, and
+        // swapping it for the server copy re-rendered it and jerked the scroll up
+        // to the operator's last message ("Stop shouldn't move the chat").
+        if (signal?.aborted) {
+          finishTurn(chatId);
+          return;
+        }
         // Closed unexpectedly (network blip / tunnel) — the task may live on.
         let status: TaskStatusDto | null = null;
         try {
