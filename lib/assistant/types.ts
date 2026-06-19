@@ -83,6 +83,10 @@ export interface TaskStatusDto {
   seq: number;
   /** For a sleeping task: epoch-ms it will wake and continue on its own. */
   wakeAt?: number;
+  /** For a sleeping task: the id + label of the timer it's waiting on, so the
+   *  client re-arms exactly that timer (not "the last one") when several exist. */
+  timerId?: string;
+  timerLabel?: string;
 }
 
 export interface AssistantRequestBody {

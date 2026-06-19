@@ -301,6 +301,10 @@ export function AssistantSidebar({
   onClose: () => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
+  // Mirror of `items` for synchronous reads in callbacks/timers (so a reconcile
+  // can tell whether a server-named timer is even in our transcript yet).
+  const itemsRef = useRef<Item[]>([]);
+  itemsRef.current = items;
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   // Flips true once the chat collection has loaded/reconciled, so the one-time
@@ -1048,6 +1052,14 @@ export function AssistantSidebar({
         if (idx >= 0) next[idx] = row;
         else next.push(row);
       } else if (e.type === 'timer') {
+        // A new wait begins, so any earlier timer is finished — settle it. Only
+        // ONE timer is ever "running", which is what locks the composer and what
+        // a reattach re-arms; two running timers is the bug behind a new timer's
+        // countdown showing up inside an old timer's widget.
+        for (let i = 0; i < next.length; i++) {
+          const it = next[i];
+          if (it.kind === 'timer' && it.status === 'running') next[i] = { ...it, status: 'done' };
+        }
         // `until` is the server's authoritative wake time; fall back to now+secs.
         next.push({
           kind: 'timer',
@@ -1169,6 +1181,35 @@ export function AssistantSidebar({
       if (opts?.reload) void reloadChatFromServer(chatId);
     },
     [reloadChatFromServer, unmarkServerOwned],
+  );
+
+  // Converge the transcript onto the SERVER's authoritative sleep state: make
+  // exactly the timer it names (by id) the running one, settle any other running
+  // timer, and clear busy (a sleeping turn is locked by the timer, not the
+  // spinner). If that timer isn't in our transcript yet — we were detached when
+  // it was set, so we hold a stale copy — pull the server's transcript first.
+  // This is what stops a new timer's countdown from rendering inside an old
+  // timer's widget, and keeps the one countdown pinned to the real wake time.
+  const armServerTimer = useCallback(
+    async (status: TaskStatusDto) => {
+      const { chatId, timerId, wakeAt, seq } = status;
+      lastSeqRef.current.set(chatId, seq);
+      const present =
+        !!timerId && itemsRef.current.some((it) => it.kind === 'timer' && it.id === timerId);
+      if (timerId && !present) await reloadChatFromServer(chatId);
+      if (activeIdRef.current !== chatId) return;
+      setBusy(false);
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.kind !== 'timer') return it;
+          if (timerId && it.id === timerId) {
+            return { ...it, status: 'running', endsAt: wakeAt ?? it.endsAt };
+          }
+          return it.status === 'running' ? { ...it, status: 'done' } : it;
+        }),
+      );
+    },
+    [reloadChatFromServer],
   );
 
   // Drive a chat's stream to completion: pump, and on an unexpected close or a
@@ -1366,21 +1407,10 @@ export function AssistantSidebar({
         void reattachResume(active);
         return;
       }
-      if (cur && cur.status === 'sleeping' && cur.wakeAt) {
-        // Re-arm the latest timer so the countdown shows and reattaches at wake.
-        lastSeqRef.current.set(active, cur.seq);
-        const wake = cur.wakeAt;
-        setBusy(false); // a sleeping turn is the timer's lock, not the busy spinner
-        setItems((prev) => {
-          let lastTimer = -1;
-          prev.forEach((it, i) => {
-            if (it.kind === 'timer') lastTimer = i;
-          });
-          if (lastTimer < 0) return prev;
-          return prev.map((it, i) =>
-            i === lastTimer && it.kind === 'timer' ? { ...it, status: 'running', endsAt: wake } : it,
-          );
-        });
+      if (cur && cur.status === 'sleeping') {
+        // Show exactly the timer the server is waiting on (by id), reattaching at
+        // its real wake time — never a stale "last timer item" guess.
+        await armServerTimer(cur);
         return;
       }
       // No live task for the active chat. The server is authoritative, so settle
@@ -1397,7 +1427,56 @@ export function AssistantSidebar({
     } catch {
       /* offline — the stored transcript stands */
     }
-  }, [reattachResume, markServerOwned, unmarkServerOwned]);
+  }, [reattachResume, markServerOwned, unmarkServerOwned, armServerTimer]);
+
+  // Self-healing reconcile: WHILE the composer is locked (busy spinner or a timer
+  // wait), poll the server's authoritative task status so the lock can't get
+  // stuck out of sync. Without this, a task that finished / errored / slept while
+  // we weren't actively streaming left the composer showing "working" forever —
+  // swallowing every message the operator typed (send() bails when busy) until a
+  // manual reload. We only ever RELAX the lock here (settle a finished task, or
+  // re-arm the real timer); a genuinely running task keeps streaming untouched.
+  useEffect(() => {
+    if (!busy && !timerLocks) return;
+    let cancelled = false;
+    const tick = async () => {
+      const chatId = activeIdRef.current;
+      if (!chatId) return;
+      try {
+        const r = await fetch('/api/assistant/tasks', { cache: 'no-store' });
+        if (!r.ok || cancelled) return;
+        const d = (await r.json()) as { tasks?: TaskStatusDto[] };
+        const cur = (d.tasks ?? []).find((t) => t.chatId === chatId) ?? null;
+        if (cancelled || activeIdRef.current !== chatId) return;
+        if (!cur) {
+          // Task is gone — unlock so typed messages aren't swallowed.
+          unmarkServerOwned(chatId);
+          setBusy(false);
+          setItems((prev) =>
+            prev.some((it) => it.kind === 'timer' && it.status === 'running')
+              ? prev.map((it) =>
+                  it.kind === 'timer' && it.status === 'running' ? { ...it, status: 'stopped' } : it,
+                )
+              : prev,
+          );
+        } else if (cur.status === 'sleeping') {
+          await armServerTimer(cur);
+        }
+        // running: an open stream (or its own disconnect-reattach) owns it — leave it.
+      } catch {
+        /* offline — try again next tick */
+      }
+    };
+    // Fast while "working" (a stuck spinner is the bug we're catching); gentle
+    // while only a timer waits — the countdown handles the display, this is just
+    // insurance, so a multi-hour timer doesn't poll every few seconds for hours.
+    const interval = busy ? 3500 : 30000;
+    const id = window.setInterval(() => void tick(), interval);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [busy, timerLocks, armServerTimer, unmarkServerOwned]);
 
   // Once chats are loaded, reattach the active chat's live task exactly once (a
   // reload landing back on a running/sleeping turn picks it up automatically).

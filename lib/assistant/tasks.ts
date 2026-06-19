@@ -91,6 +91,10 @@ interface TaskRecord {
   items: ProjItem[];
   /** Sleeping tasks: epoch-ms wake time. */
   wakeAt?: number;
+  /** Sleeping tasks: the timer being waited on (so the client re-arms exactly
+   *  this one, by id, instead of guessing "the last timer item"). */
+  activeTimerId?: string;
+  activeTimerLabel?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -318,6 +322,8 @@ async function drive(task: LiveTask, turns: ChatTurn[]): Promise<void> {
   task.status = 'running';
   task.sawError = false;
   task.wakeAt = undefined;
+  task.activeTimerId = undefined;
+  task.activeTimerLabel = undefined;
   const ctx = makeCtx(task);
   try {
     await runProvider(task, turns, ctx);
@@ -349,6 +355,8 @@ async function drive(task: LiveTask, turns: ChatTurn[]): Promise<void> {
 function scheduleSleep(task: LiveTask, sleep: { seconds: number; label: string; id: string }): void {
   task.status = 'sleeping';
   task.wakeAt = Date.now() + sleep.seconds * 1000;
+  task.activeTimerId = sleep.id;
+  task.activeTimerLabel = sleep.label;
   emit(task, { type: 'sleep', until: task.wakeAt });
   writeTurn(task);
   persist();
@@ -528,7 +536,14 @@ export function liveTaskStatus(chatId: string): TaskStatusDto | null {
   // tail, but it is NOT live — reporting it as such would leave a stale "working"
   // dot and re-lock the composer for a finished turn. Treat terminal as absent.
   if (!task || isTerminal(task.status)) return null;
-  return { chatId, status: task.status, seq: task.seq, wakeAt: task.wakeAt };
+  return {
+    chatId,
+    status: task.status,
+    seq: task.seq,
+    wakeAt: task.wakeAt,
+    timerId: task.activeTimerId,
+    timerLabel: task.activeTimerLabel,
+  };
 }
 
 export function liveTaskStatuses(): TaskStatusDto[] {
@@ -539,6 +554,8 @@ export function liveTaskStatuses(): TaskStatusDto[] {
       status: t.status,
       seq: t.seq,
       wakeAt: t.wakeAt,
+      timerId: t.activeTimerId,
+      timerLabel: t.activeTimerLabel,
     }));
 }
 
@@ -640,6 +657,8 @@ function loadOnce(): void {
       const lastTimer = [...task.items].reverse().find((it) => it.kind === 'timer');
       const label = lastTimer && lastTimer.kind === 'timer' ? lastTimer.label : 'waiting';
       const id = lastTimer && lastTimer.kind === 'timer' ? lastTimer.id : randomUUID();
+      task.activeTimerId = id;
+      task.activeTimerLabel = label;
       const delay = Math.max(0, task.wakeAt! - now);
       task.timer = setTimeout(() => resume(task, label, id), delay);
     } else {
