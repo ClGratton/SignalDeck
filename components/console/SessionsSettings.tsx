@@ -58,6 +58,24 @@ export function SessionsSettings() {
     void load();
   }, [load]);
 
+  // Keep the device list fresh while the panel is open: a sign-in on another
+  // device (e.g. a QR redeem on a phone) should appear on its own, without
+  // closing and reopening Settings. Poll lightly + refresh when the tab regains
+  // focus (covers coming back from the phone).
+  useEffect(() => {
+    const id = setInterval(() => void load(), 5000);
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [load]);
+
   // Tick once a second only while a QR is live (for its countdown).
   useEffect(() => {
     if (!qr) {
