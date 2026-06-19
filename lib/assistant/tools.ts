@@ -23,6 +23,7 @@ import {
   proxmoxGuestPower,
   haCallService,
   labRequest,
+  proxmoxNodeAddress,
   LAB_SERVICES,
   type GuestPowerAction,
   type LabService,
@@ -323,7 +324,7 @@ const ACTION_TOOLS: ToolDef[] = [
         command: { type: 'string', description: 'The shell command to run on the host.' },
         host: {
           type: 'string',
-          description: 'Optional: the cluster node hostname/IP to run on (same credentials). Use the node that owns the target guest. Omit for the default entry host.',
+          description: 'Optional: which node to run on (same credentials). A guest lives only on its own node, so to pct exec into it pass the OWNING node — its NAME from /cluster/resources is enough (the server maps a Proxmox node name to that node\'s address; an IP also works). Omit only for tasks on the entry node itself.',
         },
         summary: { type: 'string', description: 'Short human summary for the action card.' },
       },
@@ -657,7 +658,19 @@ export async function executeTool(
           // Read-only commands auto-run in "critical" mode; only ones that
           // delete/overwrite files or stop/destroy a service or guest confirm.
           critical: shellCommandCritical(command),
-          run: () => sshRun(command, host || undefined),
+          run: async () => {
+            // The agent targets the node that owns a guest by NAME (from its lab
+            // map), but a Proxmox node's short hostname rarely resolves from here.
+            // If `host` is a bare node name, map it to that node's cluster IP so
+            // reaching the right node just works instead of failing back to the
+            // entry node. An IP or dotted host is used as-is.
+            let target = host || undefined;
+            if (target && !/^\d{1,3}(\.\d{1,3}){3}$/.test(target) && !target.includes('.')) {
+              const ip = await proxmoxNodeAddress(target);
+              if (ip) target = ip;
+            }
+            return sshRun(command, target);
+          },
         },
         ctx,
       );

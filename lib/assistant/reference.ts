@@ -50,14 +50,16 @@ const SSH = `# run_shell — shell access over SSH
 
 When the REST APIs can't do it (exec in a guest, read logs, inspect a file), run a command over SSH. It lands on the configured entry host by default; on a multi-node cluster pass run_shell's \`host\` to the node that owns the guest so you reach it directly — that's a parameter, not a default to work around.
 
-From a Proxmox node you can reach its local containers:
+\`pct exec\` only reaches containers on the SAME node it runs on — it is NOT cluster-wide. So a guest on another node fails on the entry node; you must run on the OWNING node. Pass that node's NAME as run_shell \`host\` (the server maps a Proxmox node name to its address — a node's short hostname usually doesn't resolve from here, so DON'T pass a bare name to ssh inside a command; let \`host\` do it). An IP also works.
+
+From the node that owns it you can reach its local guests:
 - pct exec {vmid} -- {command}        # run a command inside an LXC container ON THAT node
 - pct exec {vmid} -- journalctl -u {service} -n 50 --no-pager
 - qm guest exec {vmid} --             # for QEMU VMs (needs qemu-guest-agent)
 - cat /etc/pve/... , journalctl ... , systemctl status {service}
 
 Rules:
-- A guest only exists on ITS node. Get the owning node + real vmid from GET /cluster/resources, then set run_shell \`host\` to that node — don't assume one node, don't ssh-hop as a workaround.
+- A guest only exists on ITS node. Get the owning node + real vmid from GET /cluster/resources (or your lab map), then set run_shell \`host\` to that node name — don't default to the entry node, don't ssh-hop as a workaround.
 - run_shell confirms in agent "all" mode and, in "critical" mode, ONLY when the command is destructive (deletes/overwrites files, or stops/destroys/reconfigures a service or guest). Read-only commands (zpool status, zdb, grep, journalctl, du…) auto-run in "critical" mode.
 - Prefer the proper API first: e.g. HA registry edits go through lab_request homeassistant WebSocket commands (the server has the token), NOT by shelling into the HA container.
 - Keep commands read-only unless the task is explicitly to change something. Report exit code + output.

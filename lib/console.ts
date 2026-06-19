@@ -589,6 +589,28 @@ export async function proxmoxGuestPower(
   return { ok: true, detail: `${action} sent to ${type}/${vmid} on ${node}.` };
 }
 
+/** Resolve a Proxmox NODE NAME (e.g. "proxmox02") to its cluster IP. A guest
+ *  only exists on its own node, so to `pct exec` into it run_shell must SSH to
+ *  THAT node — but a node's short hostname usually doesn't resolve from the
+ *  dashboard's network, which is why aiming run_shell at "proxmox02" failed and
+ *  the agent fell back to the entry node. /cluster/status reports each node's IP;
+ *  this maps the name the agent already knows (from /cluster/resources and its
+ *  lab map) to a reachable address. Returns null if it can't resolve. */
+export async function proxmoxNodeAddress(node: string): Promise<string | null> {
+  const auth = pveAuth('agent');
+  if (!auth || !/^[a-zA-Z0-9.-]+$/.test(node)) return null;
+  const res = await labFetch(`${auth.base}/api2/json/cluster/status`, {
+    method: 'GET',
+    headers: auth.headers,
+    verifyTls: auth.verifyTls,
+  });
+  if (!res || !res.ok) return null;
+  const list = (res.data as { data?: Array<{ type?: string; name?: string; ip?: string }> })?.data;
+  if (!Array.isArray(list)) return null;
+  const hit = list.find((e) => e.type === 'node' && e.name === node && typeof e.ip === 'string');
+  return hit?.ip ?? null;
+}
+
 /** Generic Proxmox API call — the assistant's "do anything" action. The model
  *  proposes ANY method+path (e.g. DELETE /nodes/x/lxc/108 to destroy a guest,
  *  POST .../config to reconfigure); it still runs ONLY after the operator

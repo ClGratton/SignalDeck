@@ -68,8 +68,9 @@ export const SERVICE_FIELDS: ServiceField[] = [
   { name: 'CLOUDFLARE_API_TOKEN', label: 'API token', group: 'Cloudflare', secret: true },
   { name: 'CLOUDFLARE_ZONE_ID', label: 'Zone ID', group: 'Cloudflare', secret: false },
   // SSH gives the assistant shell access for what the REST APIs can't do (exec
-  // into containers, read logs). Point it at the Proxmox node — `pct exec`
-  // reaches every container from there.
+  // into containers, read logs). Point it at the ENTRY Proxmox node; `pct exec`
+  // only reaches guests on that node, so for a multi-node cluster the assistant
+  // targets the owning node per call (run_shell resolves a node name to its IP).
   { name: 'SSH_HOST', label: 'Host', group: 'Shell (SSH)', secret: false, placeholder: '10.0.0.2', privilegedForActions: true },
   { name: 'SSH_PORT', label: 'Port', group: 'Shell (SSH)', secret: false, placeholder: '22' },
   { name: 'SSH_USER', label: 'User', group: 'Shell (SSH)', secret: false, placeholder: 'root', privilegedForActions: true },

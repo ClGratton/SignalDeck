@@ -4,9 +4,11 @@
 // Some things the REST APIs simply cannot do — exec inside a container
 // (`pct exec <vmid> -- ...`), read a service's logs (`journalctl`), inspect a
 // config file. For those the assistant runs a command over SSH on the host
-// configured in Settings (typically the Proxmox node, from which `pct exec`
-// reaches every container). Credentials come from service-config (env or the
-// override store) and never reach the browser.
+// configured in Settings (the entry Proxmox node). `pct exec` only reaches
+// containers ON THAT node, so in a multi-node cluster sshRun takes a host
+// override to target the node that actually owns a guest (the run_shell tool
+// resolves a node NAME to its address). Credentials come from service-config
+// (env or the override store) and never reach the browser.
 //
 // This is the most powerful capability in the app — it is ALWAYS treated as a
 // critical action (operator confirmation in agent "critical"/"all" modes).
