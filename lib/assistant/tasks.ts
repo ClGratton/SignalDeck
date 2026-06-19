@@ -471,6 +471,13 @@ export function streamFrames(chatId: string, fromSeq: number): ReadableStream<Ui
   if (!tasks.has(chatId)) return null;
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | null = null;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  const stopHeartbeat = () => {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+  };
   return new ReadableStream<Uint8Array>({
     start(controller) {
       const onFrame = (f: StreamFrame) => {
@@ -481,6 +488,7 @@ export function streamFrames(chatId: string, fromSeq: number): ReadableStream<Ui
         }
         if (f.event.type === 'done' || f.event.type === 'error') {
           if (unsubscribe) unsubscribe();
+          stopHeartbeat();
           try {
             controller.close();
           } catch {
@@ -495,12 +503,25 @@ export function streamFrames(chatId: string, fromSeq: number): ReadableStream<Ui
         } catch {
           /* already closed */
         }
+        return;
       }
+      // Heartbeat: a bare newline the client skips (its parser ignores blank
+      // lines). A long step can be silent for minutes; without periodic bytes a
+      // reverse proxy (Cloudflare's ~100s cap) kills the connection → HTTP 524.
+      // The task survives a kill, but this keeps the live stream attached.
+      heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode('\n'));
+        } catch {
+          stopHeartbeat();
+        }
+      }, 20_000);
     },
     cancel() {
       // The reader (client) detached: stop sending frames, but DO NOT abort the
       // task — that's the whole point. It keeps running and is reattachable.
       if (unsubscribe) unsubscribe();
+      stopHeartbeat();
     },
   });
 }

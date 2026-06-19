@@ -1356,6 +1356,14 @@ export function AssistantSidebar({
           await reattachResume(chatId);
           return;
         }
+        // A reverse-proxy gateway timeout (Cloudflare 524, or 502/503/504) killed
+        // the connection while holding the stream — but startTask already kicked
+        // the task off server-side, so it's RUNNING. Reattach instead of showing
+        // a dead "Request failed"; the heartbeat makes this rare to begin with.
+        if (res.status === 524 || res.status === 502 || res.status === 503 || res.status === 504) {
+          await reattachResume(chatId);
+          return;
+        }
         if (!res.ok || !res.body) {
           let message = `Request failed (HTTP ${res.status}).`;
           try {
@@ -1943,7 +1951,12 @@ export function AssistantSidebar({
               }
             })
           )}
-          {busy ? (
+          {busy && activeIdRef.current && liveChats.includes(activeIdRef.current) ? (
+            // "working" is gated on the SERVER-reconciled live-task set (the same
+            // signal as the chat-list dot), not the bare client busy flag — so it
+            // can't show the illusion of working after the task has actually ended
+            // (the self-healing poll drops the chat from liveChats when the server
+            // reports no live task).
             <div className={`${styles.thinking} mono`} aria-live="polite">
               <span className={styles.thinkingDot} />
               working
