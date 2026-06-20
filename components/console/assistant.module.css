@@ -274,9 +274,17 @@
   text-decoration: underline;
 }
 
-.user {
+.userWrap {
   align-self: flex-end;
   max-width: 88%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+}
+.user {
+  align-self: flex-end;
+  max-width: 100%;
   padding: 0.45rem 0.7rem;
   font-size: var(--text-sm);
   color: var(--ink-strong);
@@ -284,6 +292,57 @@
   border-radius: var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* Hover footer under an operator message: time on the left, copy + rewind on the
+   right, icon-only. Hidden until hover/focus so it stays quiet (touch: dimmed). */
+.msgFoot {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.1rem;
+  opacity: 0;
+  transition: opacity 120ms var(--ease-out-quint, ease-out);
+}
+.userWrap:hover .msgFoot,
+.userWrap:focus-within .msgFoot {
+  opacity: 1;
+}
+@media (hover: none) {
+  .msgFoot {
+    opacity: 0.65;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msgFoot {
+    transition: none;
+  }
+}
+.msgTime {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.msgActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+.msgBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 100ms ease-out, background 100ms ease-out;
+}
+.msgBtn:hover {
+  color: var(--ink);
+  background: var(--surface-2);
 }
 
 .assistant {

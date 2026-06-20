@@ -22,10 +22,12 @@ import {
   ChevronUp,
   ListChecks,
   Clock,
+  Copy,
   Eye,
   History,
   KeyRound,
   Plus,
+  RotateCcw,
   Send,
   Square,
   SquarePen,
@@ -53,7 +55,7 @@ import styles from './assistant.module.css';
 type ProposalState = 'pending' | 'running' | 'ok' | 'fail' | 'gone';
 
 type Item =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; at?: number }
   | { kind: 'assistant'; text: string }
   | { kind: 'reasoning'; text: string }
   | { kind: 'tool'; label: string }
@@ -83,6 +85,7 @@ const CHATS_KEY = 'grtlabs:assistant-chats:v1';
 const PICK_KEY = 'grtlabs:assistant-pick:v1';
 const MRU_KEY = 'grtlabs:assistant-mru:v1';
 const MRU_MAX = 3; // how many recently-used models lead the menu per provider
+const DRAFT_KEY = 'grtlabs:assistant-draft';
 const MODE_KEY = 'grtlabs:assistant-mode';
 const APPROVAL_KEY = 'grtlabs:assistant-approval';
 const LEGACY_ACTIONS_KEY = 'grtlabs:assistant-actions';
@@ -132,13 +135,39 @@ const timeAgo = (ts: number) => {
   return `${Math.round(h / 24)}d ago`;
 };
 
+/** The chat-list "X ago" should reflect when the OPERATOR last spoke, not the
+ *  chat's updatedAt — a chat with a live timer has its updatedAt bumped on every
+ *  server sleep-write, which made merely opening it (pulling the server copy)
+ *  show a misleadingly fresh "1m ago". Fall back to updatedAt for older chats
+ *  whose messages predate per-message timestamps. */
+const lastUserAt = (c: StoredChat): number => {
+  for (let i = c.items.length - 1; i >= 0; i--) {
+    const it = c.items[i];
+    if (it && it.kind === 'user' && typeof it.at === 'number') return it.at;
+  }
+  return c.updatedAt;
+};
+
+/** Short wall-clock label for a message footer (e.g. "14:32"). */
+const fmtClock = (ts: number) => {
+  try {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+};
+
 /** Re-hydrate persisted items; pending proposals died with their server closure. */
 function sanitizeItems(raw: unknown): Item[] {
   if (!Array.isArray(raw)) return [];
   const out: Item[] = [];
   for (const it of raw as Item[]) {
     if (!it || typeof it !== 'object') continue;
-    if (it.kind === 'user' || it.kind === 'assistant' || it.kind === 'error') {
+    if (it.kind === 'user') {
+      if (typeof it.text === 'string') {
+        out.push({ kind: 'user', text: it.text, ...(typeof it.at === 'number' ? { at: it.at } : {}) });
+      }
+    } else if (it.kind === 'assistant' || it.kind === 'error') {
       if (typeof it.text === 'string') out.push({ kind: it.kind, text: it.text });
     } else if (it.kind === 'reasoning') {
       if (typeof it.text === 'string') out.push({ kind: 'reasoning', text: it.text });
@@ -598,6 +627,9 @@ export function AssistantSidebar({
       if (savedApproval === 'all' || savedApproval === 'critical' || savedApproval === 'auto') {
         setApproval(savedApproval);
       }
+      // Restore an unsent draft so a reload never loses what you were typing.
+      const savedDraft = window.localStorage.getItem(DRAFT_KEY);
+      if (savedDraft) setInput(savedDraft);
     } catch {
       /* keep defaults */
     }
@@ -606,6 +638,18 @@ export function AssistantSidebar({
     scrollToBottom();
     // writeChats only runs on the one-time migration branch; it's stable.
   }, [scrollToBottom, writeChats, loadWorkspace]);
+
+  // Persist the unsent composer draft (after the initial load restores it, so the
+  // first empty render can't clobber a saved draft). Cleared when a message sends.
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    try {
+      if (input) window.localStorage.setItem(DRAFT_KEY, input);
+      else window.localStorage.removeItem(DRAFT_KEY);
+    } catch {
+      /* storage blocked — draft just won't survive a reload */
+    }
+  }, [input]);
 
   // Persist the live transcript (debounced — streaming mutates items rapidly).
   useEffect(() => {
@@ -1323,7 +1367,7 @@ export function AssistantSidebar({
       // model keeps its execution memory across turns (see buildHistory). Built
       // OUTSIDE the state updater (updaters can run twice in StrictMode).
       const history: ChatTurn[] = buildHistory(items);
-      setItems((prev) => [...prev, { kind: 'user', text }]);
+      setItems((prev) => [...prev, { kind: 'user', text, at: Date.now() }]);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -1530,6 +1574,23 @@ export function AssistantSidebar({
     [reattachResume],
   );
 
+  // Rewind the conversation to one of the operator's own messages: drop it and
+  // everything after, and drop its text back into the composer so they can edit
+  // and resend down a different path. Disabled mid-turn (canRewind in the render).
+  const rewindTo = useCallback(
+    (target: Extract<Item, { kind: 'user' }>) => {
+      const cur = itemsRef.current;
+      const idx = cur.indexOf(target);
+      if (idx < 0) return;
+      const before = cur.slice(0, idx);
+      setItems(before);
+      setInput(target.text);
+      flush(before);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    },
+    [flush],
+  );
+
   // Resolve an inline (agent-mode) action awaiting Run/Skip.
   const decide = useCallback(async (id: string, decision: 'run' | 'skip') => {
     setItems((prev) =>
@@ -1711,7 +1772,7 @@ export function AssistantSidebar({
                       title="The agent is working on this chat"
                     />
                   ) : null}
-                  <span className={`${styles.chatTime} mono`}>{timeAgo(c.updatedAt)}</span>
+                  <span className={`${styles.chatTime} mono`}>{timeAgo(lastUserAt(c))}</span>
                 </button>
                 <button
                   type="button"
@@ -1881,9 +1942,12 @@ export function AssistantSidebar({
               switch (it.kind) {
                 case 'user':
                   return (
-                    <div key={i} className={styles.user}>
-                      {it.text}
-                    </div>
+                    <UserMessage
+                      key={i}
+                      item={it}
+                      canRewind={!busy && !timerLocks}
+                      onRewind={() => rewindTo(it)}
+                    />
                   );
                 case 'assistant':
                   return (
@@ -2514,6 +2578,64 @@ function ToolGroupChip({ labels }: { labels: string[] }) {
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** An operator message bubble with a hover footer: wall-clock time on the left,
+ *  copy + rewind on the right (icon-only, like a chat app). Copy flips to a check
+ *  briefly; rewind drops this message and everything after back into the composer. */
+function UserMessage({
+  item,
+  canRewind,
+  onRewind,
+}: {
+  item: Extract<Item, { kind: 'user' }>;
+  canRewind: boolean;
+  onRewind: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    try {
+      void navigator.clipboard
+        ?.writeText(item.text)
+        .then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1400);
+        })
+        .catch(() => {});
+    } catch {
+      /* clipboard blocked */
+    }
+  };
+  return (
+    <div className={styles.userWrap}>
+      <div className={styles.user}>{item.text}</div>
+      <div className={styles.msgFoot}>
+        {item.at ? <span className={styles.msgTime}>{fmtClock(item.at)}</span> : null}
+        <span className={styles.msgActions}>
+          <button
+            type="button"
+            className={styles.msgBtn}
+            onClick={copy}
+            title={copied ? 'Copied' : 'Copy'}
+            aria-label="Copy message"
+          >
+            {copied ? <Check size={13} strokeWidth={2.4} /> : <Copy size={13} strokeWidth={2.2} />}
+          </button>
+          {canRewind ? (
+            <button
+              type="button"
+              className={styles.msgBtn}
+              onClick={onRewind}
+              title="Rewind to here"
+              aria-label="Rewind the conversation to this message"
+            >
+              <RotateCcw size={13} strokeWidth={2.2} />
+            </button>
+          ) : null}
+        </span>
+      </div>
     </div>
   );
 }
