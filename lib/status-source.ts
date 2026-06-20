@@ -48,9 +48,10 @@ function toAggregate(summary: HomelabSummary | null): AggregateStatus {
     uptimeLabel: s.uptime,
   }));
   const affected = fallbackSystems.filter((s) => s.health !== 'ok').length;
+  const total = fallbackSystems.length;
   return {
     level: levelFor(affected),
-    services: { total: 12, healthy: 12 - affected, affected },
+    services: { total, healthy: total - affected, affected },
     uptimeSeconds: Math.max(0, Math.floor((Date.now() - BOOT_EPOCH_MS) / 1000)),
     load: 38,
     systems: fallbackSystems,

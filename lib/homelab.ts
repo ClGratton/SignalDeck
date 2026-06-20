@@ -463,8 +463,14 @@ async function build(): Promise<HomelabSummary | null> {
   // Persist today's health so the status page can draw a real history over time.
   recordSystems(systems);
 
-  // Aggregate "services" = running guests, the headline count.
-  const total = pve.vms + pve.containers;
+  // "services" = the monitored platforms (the `systems` above: Proxmox, TrueNAS,
+  // Jellyfin, Home Assistant), so the headline count is CONSISTENT with the
+  // health it reports (`affected` is drawn from these same systems). It used to
+  // be pve.vms + pve.containers — every guest incl. stopped ones and templates —
+  // which both over-counted and made "healthy = total - affected" nonsense
+  // (guest count minus platform-health). The guest totals stay available as the
+  // separate vms / containers specs on the landing page.
+  const total = systems.length;
   const affected = systems.filter((s) => s.health !== 'ok').length;
 
   return {
