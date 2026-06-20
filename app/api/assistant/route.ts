@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { hasValidSession } from '@/lib/session';
 import { getProviderKey, providerDef, PROVIDERS } from '@/lib/assistant/keys';
 import { defaultModel, isKnownModel } from '@/lib/assistant/models';
-import { startTask, streamFrames } from '@/lib/assistant/tasks';
+import { startTask, streamFrames, streamHeaders } from '@/lib/assistant/tasks';
 import type {
   ApprovalLevel,
   AssistantMode,
@@ -92,10 +92,5 @@ export async function POST(req: NextRequest) {
     // the result is already in the chat store — tell the client to reload it.
     return NextResponse.json({ ok: true, reattach: true }, { status: 202 });
   }
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'application/x-ndjson; charset=utf-8',
-      'Cache-Control': 'private, no-store',
-    },
-  });
+  return new Response(stream, { headers: streamHeaders() });
 }

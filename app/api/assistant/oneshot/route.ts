@@ -6,6 +6,7 @@ import { runOpenAiTurn } from '@/lib/assistant/openai';
 import { getProviderKey, getProviderBaseUrl, providerDef, PROVIDERS } from '@/lib/assistant/keys';
 import { defaultModel, isKnownModel } from '@/lib/assistant/models';
 import { awaitDecision } from '@/lib/assistant/decisions';
+import { streamHeaders } from '@/lib/assistant/tasks';
 import type { ToolContext } from '@/lib/assistant/tools';
 import type {
   AssistantEvent,
@@ -115,10 +116,5 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'application/x-ndjson; charset=utf-8',
-      'Cache-Control': 'private, no-store',
-    },
-  });
+  return new Response(stream, { headers: streamHeaders() });
 }

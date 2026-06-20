@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { hasValidSession } from '@/lib/session';
-import { streamFrames, liveTaskStatus } from '@/lib/assistant/tasks';
+import { streamFrames, liveTaskStatus, streamHeaders } from '@/lib/assistant/tasks';
 
 export const runtime = 'nodejs';
 
@@ -29,10 +29,5 @@ export async function GET(req: NextRequest) {
   if (!stream) {
     return NextResponse.json({ error: 'no live task' }, { status: 404 });
   }
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'application/x-ndjson; charset=utf-8',
-      'Cache-Control': 'private, no-store',
-    },
-  });
+  return new Response(stream, { headers: streamHeaders() });
 }

@@ -464,6 +464,19 @@ export function taskTerminal(chatId: string): boolean {
   return !task || isTerminal(task.status);
 }
 
+/** Headers that keep an NDJSON stream actually STREAMING end to end. Without
+ *  `no-transform` a CDN (Cloudflare) buffers the body to compress it, and
+ *  without `X-Accel-Buffering: no` a reverse proxy (nginx/Traefik) buffers too —
+ *  either way the client gets the whole turn at once at the end instead of token
+ *  by token, which reads as "not real-time / had to reload to see output". */
+export function streamHeaders(): Record<string, string> {
+  return {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'private, no-store, no-transform',
+    'X-Accel-Buffering': 'no',
+  };
+}
+
 /** Build an NDJSON stream of a chat's task frames (replay after `fromSeq`, then
  *  live), closing when the turn finishes. Detaching (client disconnect) only
  *  removes the subscriber — the task keeps running. Null if no task to attach. */
