@@ -1531,6 +1531,56 @@ export function AssistantSidebar({
     };
   }, [busy, timerLocks, armServerTimer, unmarkServerOwned]);
 
+  // Periodic GLOBAL reconcile of the chat-list "working" dots against the
+  // server's authoritative live set. The dots were otherwise reconciled in only
+  // two places — the one-time load pass and the active-chat busy/timer poll
+  // (which watches ONLY the active chat). So a task that finished or slept while
+  // we were detached (a reload, the PC asleep when a timer fired, or simply a
+  // non-active chat) left a stranded dot: "active shown but nothing running".
+  // This closes that hole: while ANY chat is flagged live, re-fetch the live set
+  // every few seconds and DROP any dot the server no longer reports. It is purely
+  // SUBTRACTIVE — it never opens a stream (the active chat's own stream / poll
+  // owns reattach), so it can't double-attach; it only unsticks stale dots and,
+  // if the finished task was the chat on screen, settles its lock too.
+  useEffect(() => {
+    if (liveChats.length === 0) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/assistant/tasks', { cache: 'no-store' });
+        if (!r.ok || cancelled) return;
+        const d = (await r.json()) as { tasks?: TaskStatusDto[] };
+        const liveIds = new Set((d.tasks ?? []).map((t) => t.chatId));
+        if (cancelled) return;
+        for (const id of [...serverOwnedRef.current]) {
+          if (liveIds.has(id)) continue;
+          unmarkServerOwned(id);
+          // The now-finished task was the chat on screen — settle its lock so the
+          // composer isn't stuck "working" and a stale running timer is closed.
+          if (activeIdRef.current === id) {
+            setBusy(false);
+            setItems((prev) =>
+              prev.some((it) => it.kind === 'timer' && it.status === 'running')
+                ? prev.map((it) =>
+                    it.kind === 'timer' && it.status === 'running'
+                      ? { ...it, status: 'stopped' }
+                      : it,
+                  )
+                : prev,
+            );
+          }
+        }
+      } catch {
+        /* offline — retry next tick */
+      }
+    };
+    const id = window.setInterval(() => void tick(), 6000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [liveChats.length, unmarkServerOwned]);
+
   // Once chats are loaded, reattach the active chat's live task exactly once (a
   // reload landing back on a running/sleeping turn picks it up automatically).
   useEffect(() => {
