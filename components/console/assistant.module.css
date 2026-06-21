@@ -395,13 +395,18 @@
 /* ── ETA timer (countdown the model set before waiting) ─────────────────────── */
 .timer {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 0.5rem;
-  padding: 0.4rem 0.6rem;
+  padding: 0.45rem 0.6rem;
   font-size: var(--text-sm);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: color-mix(in oklch, var(--accent) 7%, transparent);
+}
+.timerMain {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 .timer[data-status='done'],
 .timer[data-status='stopped'] {
@@ -435,9 +440,9 @@
   font-weight: 500;
 }
 .timerBtns {
-  flex: none;
   display: flex;
-  gap: 0.35rem;
+  gap: 0.4rem;
+  justify-content: flex-end;
 }
 .timerRun,
 .timerDelete {

@@ -2735,18 +2735,20 @@ function TimerWidget({
 
   return (
     <div className={styles.timer} data-status={status}>
-      <Clock size={14} strokeWidth={2.2} aria-hidden className={styles.timerIcon} />
-      <span className={styles.timerLabel}>{label}</span>
-      <span className={`${styles.timerClock} mono`}>{stateWord}</span>
+      <div className={styles.timerMain}>
+        <Clock size={14} strokeWidth={2.2} aria-hidden className={styles.timerIcon} />
+        <span className={styles.timerLabel}>{label}</span>
+        <span className={`${styles.timerClock} mono`}>{stateWord}</span>
+      </div>
       {status === 'running' ? (
-        <span className={styles.timerBtns}>
+        <div className={styles.timerBtns}>
           <button type="button" className={styles.timerRun} onClick={() => onRunNow(id)}>
             Run now
           </button>
           <button type="button" className={styles.timerDelete} onClick={() => onDelete(id)}>
             Delete
           </button>
-        </span>
+        </div>
       ) : null}
     </div>
   );
