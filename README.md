@@ -133,6 +133,29 @@ the **operator's approval**, not a narrow tool menu.
   own base URL + auth + transport. `guest_power` and `ha_service` are convenience
   wrappers; `run_shell` runs commands over SSH (e.g. `pct exec`) for what no API
   covers; `list_ha_entities` / `read_reference` round it out.
+- **APIs the assistant can reach** (all via `lab_request`, each a distinct
+  base URL + auth resolved server-side):
+
+  | `service` | Backend | Surface |
+  |---|---|---|
+  | `proxmox` | Proxmox VE | REST under `/api2/json` |
+  | `truenas` | TrueNAS SCALE | JSON-RPC 2.0 (method in `path`) |
+  | `homeassistant` | Home Assistant | REST `/api/…` **and** WebSocket command types (entity/device registry) |
+  | `jellyfin` | Jellyfin | REST |
+  | `cloudflare` | Cloudflare | REST under `/client/v4` |
+
+  Plus **`run_shell`** (SSH to a lab host) and, when a search key is set,
+  **`web_search` / `web_fetch`** (below).
+- **Web access (opt-in)** — with a Tavily key set (Settings → Assistant), the
+  model gets `web_search` (ranked snippets + URLs) and `web_fetch` (one page as
+  markdown) for the public internet — the standard search→fetch pattern behind a
+  swappable backend (`lib/assistant/web.ts`). The tools are hidden until a key is
+  configured, so the model is never told it has internet when it doesn't. They are
+  **text-only**: `web_fetch` returns markdown and, when a page can't be read
+  (JS-only, login-gated, blocked, or a non-public URL), reports that explicitly
+  so the model says so instead of inventing it. Tavily performs the page fetch on
+  its side, so the dashboard makes no outbound page request — no SSRF from inside
+  the LAN, and the lab's own hosts always go through `lab_request`/`run_shell`.
 - **The model never sees the backend secret.** It supplies only
   `service / method / path / body` — never a credential. The server attaches the
   token to the outgoing request itself, so the API secret is in neither the
@@ -185,6 +208,18 @@ freely (replaying only what it missed). Concretely:
   **Stop** cancels the task (the timer can't resurrect on reload).
 - **Concurrent chats** — independent tasks run in parallel; the chat list shows a
   pulsing dot next to any chat the agent is still working.
+
+### Roadmap — visual browser (next step)
+`web_fetch` is text-only; the planned next capability is a **visual browser the
+assistant can actually see** — pointed at the same dashboard the operator is
+using, so the AI and the operator share one view and the AI can read charts,
+layouts, and anything JavaScript-rendered. It slots onto the existing seam:
+`WebBackend.view(url)` in `lib/assistant/web.ts` (left unimplemented), reached
+when `web_fetch` returns `readable:false`. It needs two things first: a way to
+send the model **images** (each provider's vision/multimodal input — Anthropic
+image content blocks, Gemini `inlineData`, OpenAI `image_url`) and the
+file/image-sharing channel into the chat that doesn't exist yet. Until both
+land, the assistant stays text-only and is told to say when it can't read a page.
 
 ### Other features
 - **Skills** — client-side slash commands. `/compact [%]` rewrites the transcript

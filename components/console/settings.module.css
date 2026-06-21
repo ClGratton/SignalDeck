@@ -194,6 +194,11 @@
   color: var(--ok-ink);
   border-color: color-mix(in oklch, var(--ok) 45%, var(--border));
 }
+.fieldError {
+  margin: 0.35rem 0 0;
+  font-size: var(--text-xs);
+  color: var(--down-ink);
+}
 
 .inputRow {
   display: flex;

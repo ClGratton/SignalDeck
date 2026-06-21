@@ -37,7 +37,7 @@ interface FieldDto {
 
 const isTruthy = (v: string | undefined): boolean => /^(true|1|yes|on)$/i.test((v ?? '').trim());
 
-type Draft = { value: string; revealed: boolean; dirty: boolean; saving?: boolean; saved?: boolean };
+type Draft = { value: string; revealed: boolean; dirty: boolean; saving?: boolean; saved?: boolean; error?: string };
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const reveal = useReveal();
@@ -126,23 +126,32 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const onSave = async (f: FieldDto) => {
     const d = drafts[f.name];
     if (!d || !d.dirty) return;
-    setDraft(f.name, { saving: true });
+    setDraft(f.name, { saving: true, error: undefined });
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: f.name, value: d.value }),
       });
-      const body = (await res.json()) as { source?: FieldDto['source']; error?: string };
+      const body = (await res.json().catch(() => ({}))) as { source?: FieldDto['source']; error?: string };
       if (res.ok) {
         setFields((fs) => fs?.map((x) => (x.name === f.name ? { ...x, source: body.source ?? x.source } : x)) ?? fs);
-        setDraft(f.name, { dirty: false, saving: false, saved: true });
+        setDraft(f.name, { dirty: false, saving: false, saved: true, error: undefined });
         setTimeout(() => setDraft(f.name, { saved: false }), 1800);
       } else {
-        setDraft(f.name, { saving: false });
+        // Surface WHY instead of silently leaving the button "unsaved" — a 400
+        // "Unknown setting" means this worker predates the field (mid-deploy);
+        // a 401 means the session lapsed. Don't make the operator guess.
+        const why =
+          res.status === 401
+            ? 'Session expired — sign in again.'
+            : body.error
+              ? `${body.error} (HTTP ${res.status})`
+              : `Save failed (HTTP ${res.status}).`;
+        setDraft(f.name, { saving: false, error: why });
       }
     } catch {
-      setDraft(f.name, { saving: false });
+      setDraft(f.name, { saving: false, error: 'Network error — not saved.' });
     }
   };
 
@@ -222,7 +231,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                     : (f.placeholder ?? '')
                 : (f.placeholder ?? '')
             }
-            onChange={(e) => setDraft(f.name, { value: e.target.value, dirty: true })}
+            onChange={(e) => setDraft(f.name, { value: e.target.value, dirty: true, error: undefined })}
             autoComplete="off"
             spellCheck={false}
           />
@@ -251,6 +260,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             {d.saving ? '…' : d.saved ? 'Saved' : 'Save'}
           </button>
         </div>
+        {d.error ? <p className={styles.fieldError}>{d.error}</p> : null}
       </div>
     );
   };
