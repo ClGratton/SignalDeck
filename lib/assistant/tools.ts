@@ -38,6 +38,7 @@ import { addChatNote, setPlan, updatePlanStep } from '@/lib/assistant/chat-works
 import { isElevated } from '@/lib/reauth';
 import { markReauthRequired } from '@/lib/assistant/decisions';
 import { cfg } from '@/lib/service-config';
+import { hasWebSearch, webSearch, webFetch } from '@/lib/assistant/web';
 import { readReference, REFERENCE_TOPICS } from '@/lib/assistant/reference';
 import type {
   AssistantEvent,
@@ -247,6 +248,42 @@ const READ_TOOLS: ToolDef[] = [
   },
 ];
 
+// Web access — offered ONLY when a search backend is configured (hasWebSearch).
+// Read tools: they auto-run like the other reads. Text-only by contract; the
+// descriptions say so and tell the model to admit when it can't read a page.
+const WEB_TOOLS: ToolDef[] = [
+  {
+    name: 'web_search',
+    description:
+      'Search the PUBLIC internet for things the lab tools cannot answer — software docs, a config how-to, the meaning of an error message, a current version/release, hardware specs, "what does this SMART attribute mean", etc. Returns ranked results (title, URL, short snippet) and sometimes a direct answer. This sends your query to an external search service. It returns SNIPPETS, not full pages — when a snippet is not enough, call web_fetch on the most promising URL to read it. Use this instead of guessing from memory on anything time-sensitive or version-specific.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The search query.' },
+        max: { type: 'integer', description: 'How many results, 1-10 (default 5).' },
+        topic: {
+          type: 'string',
+          enum: ['general', 'news'],
+          description: 'Use "news" for recent events/announcements; "general" otherwise (default).',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'web_fetch',
+    description:
+      'Read ONE public web page as TEXT (markdown) — call it on a URL from web_search (or one the operator gave you) when the snippet is not enough. IMPORTANT: this returns text only. It CANNOT see images, layout, charts, video, canvases, or anything behind a login or heavy JavaScript. If the page cannot be read you are told so explicitly — then SAY you could not read it rather than inventing its contents. Do NOT use this for the lab\'s own internal services or hosts (use lab_request / run_shell for those); it is for the open internet.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The public http(s) URL to read.' },
+      },
+      required: ['url'],
+    },
+  },
+];
+
 const ACTION_TOOLS: ToolDef[] = [
   {
     name: 'guest_power',
@@ -334,9 +371,13 @@ const ACTION_TOOLS: ToolDef[] = [
 ];
 
 // Action tools are always offered; behaviour (propose vs execute) is decided by
-// the turn context, not by hiding tools.
+// the turn context, not by hiding tools. The web tools are the ONE exception:
+// they're only listed when a search backend is configured, since without a key
+// they can't do anything (and the model shouldn't be told it has internet when
+// it doesn't).
 export function listTools(): ToolDef[] {
-  return [...READ_TOOLS, ...ACTION_TOOLS];
+  const web = hasWebSearch() ? WEB_TOOLS : [];
+  return [...READ_TOOLS, ...web, ...ACTION_TOOLS];
 }
 
 /** Human label for the "used a tool" chip in the chat. */
@@ -366,6 +407,10 @@ export function toolLabel(name: string): string {
       return 'shell command';
     case 'read_reference':
       return 'read reference';
+    case 'web_search':
+      return 'searched the web';
+    case 'web_fetch':
+      return 'read a web page';
     case 'start_timer':
       return 'set a timer';
     case 'note_to_self':
@@ -620,6 +665,53 @@ export async function executeTool(
 
     case 'read_reference': {
       return { content: readReference(str(args.topic)) };
+    }
+
+    case 'web_search': {
+      if (!hasWebSearch()) {
+        return {
+          content:
+            'Web search is not configured. Tell the operator to set a search API key (TAVILY_API_KEY) to enable internet access. Do not retry.',
+          isError: true,
+        };
+      }
+      const query = str(args.query).trim();
+      if (!query) return { content: 'web_search needs a query.', isError: true };
+      try {
+        const max = int(args.max);
+        const topic = str(args.topic) === 'news' ? 'news' : 'general';
+        const r = await webSearch(query, { max: Number.isNaN(max) ? undefined : max, topic });
+        if (r.results.length === 0 && !r.answer) return { content: `No web results for "${query}".` };
+        const parts: string[] = [];
+        if (r.answer) parts.push(`Answer: ${r.answer}`);
+        r.results.forEach((res, i) => parts.push(`[${i + 1}] ${res.title}\n${res.url}\n${res.snippet}`));
+        parts.push('(Snippets only — call web_fetch on a URL to read the full page.)');
+        return { content: parts.join('\n\n') };
+      } catch (err) {
+        return { content: `Web search failed: ${(err as Error)?.message ?? 'error'}.`, isError: true };
+      }
+    }
+
+    case 'web_fetch': {
+      if (!hasWebSearch()) {
+        return { content: 'Web access is not configured (no search API key).', isError: true };
+      }
+      const url = str(args.url).trim();
+      if (!url) return { content: 'web_fetch needs a url.', isError: true };
+      try {
+        const r = await webFetch(url);
+        if (!r.readable) {
+          return {
+            content: `Could not read ${r.url}: ${r.reason ?? 'not extractable as text'}. Tell the operator you were unable to read this page — do not invent its contents.`,
+            isError: true,
+          };
+        }
+        return {
+          content: `${r.title ? r.title + '\n' : ''}${r.url}\n\n${r.markdown}${r.truncated ? '\n\n…[truncated]' : ''}`,
+        };
+      } catch (err) {
+        return { content: `Web fetch failed: ${(err as Error)?.message ?? 'error'}.`, isError: true };
+      }
     }
 
     case 'start_timer': {

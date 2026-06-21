@@ -218,6 +218,21 @@ it there, never by re-coupling the result to the connection.
   Never remove the risk classification, never let `critical`/`all` skip the
   confirm, and never persist tokens client-side. `auto` is an explicit,
   owner-chosen mode — not a default to widen silently.
+- **Web access (`web_search` / `web_fetch`, `lib/assistant/web.ts`)** is the
+  assistant's window to the PUBLIC internet — the standard search→fetch agent
+  pattern behind ONE swappable backend (Tavily today; `WebBackend` interface).
+  Offered to the model ONLY when a search key (`TAVILY_API_KEY`) is configured —
+  the single tool family gated on availability, so the model is never told it has
+  internet when it doesn't. They are READ tools (auto-run like the other reads),
+  and **text-only by contract**: `web_fetch` returns markdown and, when a page
+  can't be extracted (JS-only / login-gated / blocked / non-public URL), returns
+  `readable:false` + reason — the model must SAY so, never invent the page. That
+  `readable:false` branch is the deliberate seam for the FUTURE visual browser
+  (the dashboard the AI can actually see); it plugs into `WebBackend.view` once
+  there's an image channel to the model. With Tavily doing both search AND
+  extract, the dashboard box makes no outbound page fetch (Tavily does) — no SSRF
+  from inside the LAN; the `publicHttpUrl` guard also blocks internal targets, so
+  the lab's own hosts always go through `lab_request`/`run_shell`, never web_fetch.
 - Model-key and backend-credential VALUES may be revealed to the browser ONLY
   through the re-auth-gated reveal routes (`/api/assistant/keys/reveal`,
   `/api/settings/reveal`), which require a fresh password + TOTP (`lib/reauth.ts`,

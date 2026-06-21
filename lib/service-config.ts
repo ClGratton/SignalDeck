@@ -84,6 +84,9 @@ export const SERVICE_FIELDS: ServiceField[] = [
   // as "provider:model". One capable model prices every model better than asking
   // each provider about itself. Chosen via a dropdown in Settings.
   { name: 'ASSISTANT_MULTIPLIER_MODEL', label: 'Token-multiplier model', group: 'Assistant', secret: false },
+  // Web search: gives the assistant web_search / web_fetch (public internet).
+  // Setting a Tavily key turns the tools on; clearing it hides them again.
+  { name: 'TAVILY_API_KEY', label: 'Web search key (Tavily)', group: 'Assistant', secret: true, placeholder: 'tvly-…' },
   // Seconds to wait on a single backend REST call before giving up (so a dead
   // service returns an error instead of stalling the turn). Default 3.5s.
   { name: 'ASSISTANT_REQUEST_TIMEOUT', label: 'Backend request timeout', group: 'Assistant', secret: false, control: 'slider', min: 1, max: 30, step: 0.5, unit: 's', numDefault: 3.5 },
