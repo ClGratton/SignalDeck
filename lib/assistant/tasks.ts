@@ -364,16 +364,23 @@ function scheduleSleep(task: LiveTask, sleep: { seconds: number; label: string; 
   task.timer = setTimeout(() => resume(task, sleep.label, sleep.id), delay);
 }
 
-function resume(task: LiveTask, label: string, timerId: string): void {
+function resume(task: LiveTask, label: string, timerId: string, early = false): void {
   if (isTerminal(task.status)) return;
-  // The countdown elapsed: settle its item to 'done' so the resumed transcript
-  // reads "(waited for: …)" rather than a dangling running timer.
+  // The countdown elapsed (or the operator hit "Run now"): settle its item to
+  // 'done' so the resumed transcript reads "(waited for: …)" rather than a
+  // dangling running timer.
   const t = task.items.find((it) => it.kind === 'timer' && it.id === timerId);
   if (t && t.kind === 'timer') t.status = 'done';
+  // When the operator skipped the wait, say so — the model must NOT assume the
+  // full duration passed (a "wait 8h then re-check" timer run early means the
+  // thing it was waiting on likely isn't done yet).
+  const note = early
+    ? `The operator chose "Run now" on the "${label}" timer — the full wait did NOT elapse, continue now.`
+    : `The "${label}" timer elapsed — continue.`;
   const resumeTurns = mergeConsecutive([
     ...task.turns,
     ...turnsFromItems(task.items),
-    { role: 'user', content: `The "${label}" timer elapsed — continue.` },
+    { role: 'user', content: note },
   ]);
   void drive(task, resumeTurns);
 }
@@ -561,6 +568,20 @@ export function stopTask(chatId: string): boolean {
   } else {
     task.abort.abort(); // running: drive()'s abort branch finalizes it
   }
+  return true;
+}
+
+/** "Run now": wake a SLEEPING task immediately — skip the remaining wait and
+ *  resume the agent as if the timer fired now (but the model is told the full
+ *  wait did NOT elapse). No-op for a running or terminal task. */
+export function wakeTask(chatId: string): boolean {
+  const task = tasks.get(chatId);
+  if (!task || task.status !== 'sleeping') return false;
+  if (task.timer) {
+    clearTimeout(task.timer);
+    task.timer = undefined;
+  }
+  resume(task, task.activeTimerLabel ?? 'waiting', task.activeTimerId ?? '', true);
   return true;
 }
 

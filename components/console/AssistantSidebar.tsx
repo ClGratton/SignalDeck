@@ -386,9 +386,9 @@ export function AssistantSidebar({
   const [planOpen, setPlanOpen] = useState(true);
 
   // Timer turn-state: while a SERVER-side timer runs the composer is locked (the
-  // turn is "busy waiting"). The Stop button opens a keep-or-cancel prompt;
-  // cancelling stops the task so its scheduled resume is dropped.
-  const [timerPrompt, setTimerPrompt] = useState<string | null>(null);
+  // turn is "busy waiting"). The timer card carries its own controls — "Run now"
+  // (wake the server task immediately) and "Delete" (stop it, dropping the
+  // scheduled resume) — so there's no separate keep-or-cancel prompt.
 
   // Outcomes of confirmed actions, fed to the model with the next message so it
   // knows what actually ran.
@@ -728,11 +728,7 @@ export function AssistantSidebar({
     const t = items.find((it) => it.kind === 'timer' && it.status === 'running');
     return t && t.kind === 'timer' ? t.id : null;
   }, [items]);
-  // When the timer is gone (fired or cancelled) drop the prompt.
-  useEffect(() => {
-    if (!runningTimerId) setTimerPrompt(null);
-  }, [runningTimerId]);
-  const timerLocks = !!runningTimerId; // composer locked while a timer waits; button = Stop
+  const timerLocks = !!runningTimerId; // composer locked while a timer waits
 
   const choose = (provider: AssistantProvider, model: string) => {
     const next = { provider, model };
@@ -1589,11 +1585,31 @@ export function AssistantSidebar({
     void activateChatTasks();
   }, [chatsLoaded, activateChatTasks]);
 
-  // Operator chose to keep the timer waiting — just dismiss the prompt.
-  const keepTimer = useCallback(() => setTimerPrompt(null), []);
+  // "Run now": skip the remaining wait — tell the server to wake the sleeping
+  // task immediately, settle the countdown to 'done', and reattach to stream the
+  // resumed turn live (the wake makes the server task RUNNING again).
+  const runTimerNow = useCallback(
+    (id: string) => {
+      const chatId = activeIdRef.current;
+      setItems((prev) =>
+        prev.map((it) => (it.kind === 'timer' && it.id === id ? { ...it, status: 'done' } : it)),
+      );
+      if (!chatId) return;
+      void fetch('/api/assistant/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId, action: 'wake' }),
+      })
+        .then(() => reattachResume(chatId))
+        .catch(() => {
+          /* settled locally; a reload will reattach to the running task */
+        });
+    },
+    [reattachResume],
+  );
 
-  // Operator cancelled the wait: stop the whole task (which cancels the server's
-  // scheduled resume) and settle the countdown so the composer unlocks.
+  // "Delete": cancel the wait entirely — stop the whole task (which cancels the
+  // server's scheduled resume) and settle the countdown so the composer unlocks.
   const cancelTimerTask = useCallback((id: string) => {
     const chatId = activeIdRef.current;
     setItems((prev) =>
@@ -2020,7 +2036,13 @@ export function AssistantSidebar({
                   return <ActionCard key={it.id} item={it} onDecide={decide} onReauth={reauthDecide} />;
                 case 'timer':
                   return (
-                    <TimerWidget key={it.id} item={it} onStop={(id) => setTimerPrompt(id)} onDone={onTimerDone} />
+                    <TimerWidget
+                      key={it.id}
+                      item={it}
+                      onRunNow={runTimerNow}
+                      onDelete={cancelTimerTask}
+                      onDone={onTimerDone}
+                    />
                   );
                 case 'compaction':
                   return (
@@ -2383,28 +2405,6 @@ export function AssistantSidebar({
             })()
           : null}
 
-        {timerPrompt ? (
-          <div className={styles.timerPrompt} role="dialog" aria-label="Timer running">
-            <span className={styles.timerPromptText}>
-              The agent is waiting on a timer. Keep waiting, or cancel and stop it?
-            </span>
-            <div className={styles.timerPromptBtns}>
-              <button type="button" className={styles.timerKeep} onClick={keepTimer}>
-                Keep waiting
-              </button>
-              <button
-                type="button"
-                className={styles.timerDelete}
-                onClick={() => {
-                  cancelTimerTask(timerPrompt);
-                  setTimerPrompt(null);
-                }}
-              >
-                Cancel timer
-              </button>
-            </div>
-          </div>
-        ) : null}
 
         <form
           className={styles.composer}
@@ -2441,10 +2441,10 @@ export function AssistantSidebar({
               className={`${styles.sendBtn} ${styles.stopBtn}`}
               onClick={() => {
                 if (busy) stop();
-                else if (runningTimerId) setTimerPrompt(runningTimerId);
+                else if (runningTimerId) cancelTimerTask(runningTimerId);
               }}
-              aria-label={busy ? 'Stop' : 'Interrupt timer'}
-              title={busy ? 'Stop' : 'Interrupt the timer'}
+              aria-label={busy ? 'Stop' : 'Cancel timer'}
+              title={busy ? 'Stop' : 'Cancel the timer'}
             >
               <Square size={13} strokeWidth={2.6} aria-hidden fill="currentColor" />
             </button>
@@ -2692,15 +2692,18 @@ function UserMessage({
 }
 
 /** A live ETA countdown the model set before waiting. Ticks client-side; when it
- *  hits zero (and wasn't paused) it fires onDone ONCE, which re-invokes the
- *  assistant to continue. Stop cancels the auto-resume so you can interject. */
+ *  hits zero (and wasn't deleted) it fires onDone ONCE, which re-invokes the
+ *  assistant to continue. "Run now" skips the wait and resumes immediately;
+ *  "Delete" cancels the auto-resume so you can interject. */
 function TimerWidget({
   item,
-  onStop,
+  onRunNow,
+  onDelete,
   onDone,
 }: {
   item: Extract<Item, { kind: 'timer' }>;
-  onStop: (id: string) => void;
+  onRunNow: (id: string) => void;
+  onDelete: (id: string) => void;
   onDone: (id: string, label: string) => void;
 }) {
   const { id, label, endsAt, status } = item;
@@ -2728,7 +2731,7 @@ function TimerWidget({
   const ss = remaining % 60;
   const clock = hh > 0 ? `${hh}:${pad2(mm)}:${pad2(ss)}` : `${mm}:${pad2(ss)}`;
   const stateWord =
-    status === 'running' ? clock : status === 'done' ? 'continued' : 'paused';
+    status === 'running' ? clock : status === 'done' ? 'continued' : 'stopped';
 
   return (
     <div className={styles.timer} data-status={status}>
@@ -2736,9 +2739,14 @@ function TimerWidget({
       <span className={styles.timerLabel}>{label}</span>
       <span className={`${styles.timerClock} mono`}>{stateWord}</span>
       {status === 'running' ? (
-        <button type="button" className={styles.timerStop} onClick={() => onStop(id)}>
-          Stop
-        </button>
+        <span className={styles.timerBtns}>
+          <button type="button" className={styles.timerRun} onClick={() => onRunNow(id)}>
+            Run now
+          </button>
+          <button type="button" className={styles.timerDelete} onClick={() => onDelete(id)}>
+            Delete
+          </button>
+        </span>
       ) : null}
     </div>
   );

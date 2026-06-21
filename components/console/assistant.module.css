@@ -434,19 +434,36 @@
   color: var(--muted);
   font-weight: 500;
 }
-.timerStop {
+.timerBtns {
   flex: none;
-  padding: 0.15rem 0.55rem;
+  display: flex;
+  gap: 0.35rem;
+}
+.timerRun,
+.timerDelete {
+  flex: none;
+  padding: 0.15rem 0.6rem;
   font-size: var(--text-xs);
-  color: var(--ink);
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
   cursor: pointer;
 }
-.timerStop:hover {
+.timerRun {
+  color: var(--on-accent);
+  background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent-ink);
+}
+.timerRun:hover {
+  filter: brightness(1.05);
+}
+.timerDelete {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.timerDelete:hover {
+  color: var(--down-ink);
+  border-color: color-mix(in oklch, var(--down) 45%, var(--border-strong));
+  background: color-mix(in oklch, var(--down) 12%, var(--surface-2));
 }
 
 .errorRow {
@@ -911,53 +928,6 @@
   font-size: var(--text-xs);
   color: var(--muted);
   min-width: 0;
-}
-
-/* Keep-or-delete prompt shown above the composer when you Stop a running timer. */
-.timerPrompt {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  margin: 0.5rem 0.65rem 0;
-  padding: 0.55rem 0.6rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  box-shadow: var(--shadow-1);
-}
-.timerPromptText {
-  font-size: var(--text-xs);
-  color: var(--ink);
-}
-.timerPromptBtns {
-  display: flex;
-  gap: 0.4rem;
-}
-.timerKeep,
-.timerDelete {
-  flex: 1;
-  padding: 0.32rem 0.5rem;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  border: 1px solid var(--border);
-}
-.timerKeep {
-  color: var(--on-accent);
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.timerKeep:hover {
-  filter: brightness(1.05);
-}
-.timerDelete {
-  color: var(--down-ink);
-  background: color-mix(in oklch, var(--down) 12%, var(--surface));
-  border-color: color-mix(in oklch, var(--down) 35%, var(--border));
-}
-.timerDelete:hover {
-  background: color-mix(in oklch, var(--down) 20%, var(--surface));
 }
 
 /* /compact marker — a subtle divider; everything above stays visible but is sent
