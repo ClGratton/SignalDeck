@@ -65,7 +65,7 @@ type Item =
   | { kind: 'action'; id: string; title: string; status: ActionStatus; critical?: boolean; reauth?: boolean; detail?: string; request?: string }
   // A countdown the model set before waiting; ticks client-side and auto-resumes
   // the assistant when it elapses, unless the operator pauses it.
-  | { kind: 'timer'; id: string; label: string; endsAt: number; status: 'running' | 'done' | 'stopped' }
+  | { kind: 'timer'; id: string; label: string; endsAt: number; startedAt?: number; status: 'running' | 'done' | 'stopped' }
   // A /compact marker: the full transcript above STAYS VISIBLE, but everything
   // before this point is sent to the model as `summary` only. Display vs context.
   | { kind: 'compaction'; summary: string }
@@ -200,6 +200,7 @@ function sanitizeItems(raw: unknown): Item[] {
         id: it.id,
         label: typeof it.label === 'string' ? it.label : 'waiting',
         endsAt: typeof it.endsAt === 'number' ? it.endsAt : Date.now(),
+        startedAt: typeof it.startedAt === 'number' ? it.startedAt : undefined,
         status: it.status === 'done' ? 'done' : 'stopped',
       });
     } else if (it.kind === 'compaction') {
@@ -1101,13 +1102,19 @@ export function AssistantSidebar({
           if (it.kind === 'timer' && it.status === 'running') next[i] = { ...it, status: 'done' };
         }
         // `until` is the server's authoritative wake time; fall back to now+secs.
-        next.push({
-          kind: 'timer',
-          id: e.id,
-          label: e.label,
-          endsAt: e.until ?? Date.now() + e.seconds * 1000,
-          status: 'running',
-        });
+        // startedAt = endsAt − the full duration, so the progress bar measures the
+        // whole wait (not "since the client attached").
+        {
+          const endsAt = e.until ?? Date.now() + e.seconds * 1000;
+          next.push({
+            kind: 'timer',
+            id: e.id,
+            label: e.label,
+            endsAt,
+            startedAt: endsAt - e.seconds * 1000,
+            status: 'running',
+          });
+        }
       } else if (e.type === 'error') {
         next.push({ kind: 'error', text: e.message });
       }
@@ -2730,17 +2737,38 @@ function TimerWidget({
   const mm = Math.floor((remaining % 3600) / 60);
   const ss = remaining % 60;
   const clock = hh > 0 ? `${hh}:${pad2(mm)}:${pad2(ss)}` : `${mm}:${pad2(ss)}`;
-  const stateWord =
-    status === 'running' ? clock : status === 'done' ? 'continued' : 'stopped';
+
+  // Settled (done / stopped): one quiet, faded line — no countdown, no controls.
+  if (status !== 'running') {
+    return (
+      <div className={styles.timer} data-status={status}>
+        <div className={styles.timerHead}>
+          <Clock size={13} strokeWidth={2.2} aria-hidden className={styles.timerIcon} />
+          <span className={styles.timerLabel}>{label}</span>
+          <span className={`${styles.timerState} mono`}>
+            {status === 'done' ? 'continued' : 'stopped'}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // Progress across the WHOLE wait (startedAt → endsAt), driven off `remaining`
+  // so it advances with the same tick as the clock. Absent startedAt (very old
+  // persisted items) → no bar, but the countdown still reads.
+  const totalSec = item.startedAt != null ? Math.max(1, Math.round((endsAt - item.startedAt) / 1000)) : 0;
+  const pct = totalSec > 0 ? Math.min(100, Math.max(0, ((totalSec - remaining) / totalSec) * 100)) : 0;
 
   return (
-    <div className={styles.timer} data-status={status}>
-      <div className={styles.timerMain}>
-        <Clock size={14} strokeWidth={2.2} aria-hidden className={styles.timerIcon} />
+    <div className={styles.timer} data-status="running">
+      <div className={styles.timerHead}>
+        <Clock size={13} strokeWidth={2.2} aria-hidden className={styles.timerIcon} />
         <span className={styles.timerLabel}>{label}</span>
-        <span className={`${styles.timerClock} mono`}>{stateWord}</span>
       </div>
-      {status === 'running' ? (
+      <div className={styles.timerCount}>
+        <span className={`${styles.timerTime} mono`} aria-label={`${clock} remaining`}>
+          {clock}
+        </span>
         <div className={styles.timerBtns}>
           <button type="button" className={styles.timerRun} onClick={() => onRunNow(id)}>
             Run now
@@ -2748,6 +2776,17 @@ function TimerWidget({
           <button type="button" className={styles.timerDelete} onClick={() => onDelete(id)}>
             Delete
           </button>
+        </div>
+      </div>
+      {totalSec > 0 ? (
+        <div
+          className={styles.timerTrack}
+          role="progressbar"
+          aria-valuenow={Math.round(pct)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div className={styles.timerFill} style={{ width: `${pct}%` }} />
         </div>
       ) : null}
     </div>

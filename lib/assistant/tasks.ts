@@ -66,7 +66,7 @@ type ProjItem =
       critical?: boolean;
       reauth?: boolean;
     }
-  | { kind: 'timer'; id: string; label: string; endsAt: number; status: string }
+  | { kind: 'timer'; id: string; label: string; endsAt: number; startedAt?: number; status: string }
   | { kind: 'error'; text: string };
 
 interface TaskRecord {
@@ -197,15 +197,18 @@ function project(task: LiveTask, e: AssistantEvent): void {
       else items.push(row);
       break;
     }
-    case 'timer':
+    case 'timer': {
+      const endsAt = e.until ?? Date.now() + e.seconds * 1000;
       items.push({
         kind: 'timer',
         id: e.id,
         label: e.label,
-        endsAt: e.until ?? Date.now() + e.seconds * 1000,
+        endsAt,
+        startedAt: endsAt - e.seconds * 1000, // full duration → progress survives reload
         status: 'running',
       });
       break;
+    }
     case 'error':
       items.push({ kind: 'error', text: e.message });
       break;
