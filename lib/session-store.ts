@@ -39,10 +39,30 @@ const FILE = path.join(process.cwd(), 'data', 'sessions.json');
 const PERSIST_MIN_INTERVAL_MS = 30_000; // throttle lastSeen writes
 
 let mem: SessionRecord[] | null = null;
+// Mtime (ms) of the file backing the cached `mem`. The cache is NOT permanent:
+// Next.js runs the login server action and the API route handlers in separate
+// module instances / worker processes, each with its OWN `mem`, all writing this
+// one file. If `load()` cached forever (the old `if (mem) return mem`), an
+// instance that loaded `mem` at startup never saw a session ANOTHER instance
+// wrote later — so every new login validated as "session expired" on whichever
+// worker happened to serve the request, and a stale instance's persist() could
+// CLOBBER the file, deleting sessions others had created. Only the session that
+// happened to be on disk when this instance first loaded ever worked. Re-reading
+// on mtime change makes all instances converge on the shared file.
+let memMtime = -1;
 let lastPersist = 0;
 
+function fileMtimeMs(): number {
+  try {
+    return fs.statSync(FILE).mtimeMs;
+  } catch {
+    return 0; // no file yet
+  }
+}
+
 function load(): SessionRecord[] {
-  if (mem) return mem;
+  const mtime = fileMtimeMs();
+  if (mem && mtime === memMtime) return mem;
   try {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8')) as unknown;
     mem = Array.isArray(raw)
@@ -53,6 +73,7 @@ function load(): SessionRecord[] {
   } catch {
     mem = [];
   }
+  memMtime = mtime;
   return mem;
 }
 
@@ -63,6 +84,9 @@ function persist(force = false): void {
   try {
     fs.mkdirSync(path.dirname(FILE), { recursive: true });
     fs.writeFileSync(FILE, JSON.stringify(mem ?? []));
+    // Our `mem` now matches disk; record the mtime so the next load() doesn't
+    // needlessly re-read our own write (only ANOTHER instance's write re-reads).
+    memMtime = fileMtimeMs();
   } catch (err) {
     console.error('[session] store write failed:', (err as Error)?.message ?? err);
   }
