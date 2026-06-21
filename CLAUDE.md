@@ -145,6 +145,24 @@ from the HTTP request that started it. This is load-bearing for the "complete th
 job whether or not I'm connected" guarantee — do not move execution back inside
 the request stream.
 
+**TASSATIVE — the chat is server-owned and grows whether or not any client is
+connected. The client NEVER misses anything; it is a read-replica of a server
+truth, not the truth itself.** The task writes its turn into the shared chat
+store (`writeTurn`/`writeTaskChat`, `data/assistant-chats.json`) at EVERY step:
+the moment the user message arrives (`tasks.ts` `writeTurn` on start), on each
+`sleep`, and on `done`/`error`. So the transcript advances on the server while the
+operator's PC is asleep, the tab is closed, the tunnel is down, or the operator is
+logged out. When a client (re)connects it does TWO things, both of which must
+always work: (1) reattach to the live frame stream from the last seq it saw
+(`/api/assistant/stream?from=`) to catch anything still streaming, and (2) pull
+the stored transcript (`reloadChatFromServer`) to surface everything that already
+landed. The live frames are ONLY a real-time convenience — they are NEVER the
+sole carrier of a result, and a dropped/never-open connection is NEVER data loss.
+Never "explain away" a missing message as a missed live frame: if a turn ran, its
+output is in the chat store and MUST appear the instant the client reads it. If it
+doesn't, that is a bug in the persist-or-reload path, not expected behavior — fix
+it there, never by re-coupling the result to the connection.
+
 - `POST /api/assistant` STARTS a task (keyed by `chatId`, one live per chat) and
   returns a stream that merely SUBSCRIBES to it. A reload / closed tab / dropped
   tunnel / logout only detaches the subscriber (`streamFrames` `cancel()` never
