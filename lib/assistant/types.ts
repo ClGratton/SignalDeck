@@ -83,6 +83,9 @@ export interface TaskStatusDto {
   seq: number;
   /** For a sleeping task: epoch-ms it will wake and continue on its own. */
   wakeAt?: number;
+  /** For a sleeping task: epoch-ms the wait began, so the client's progress bar
+   *  spans the whole wait (wakeAt − startedAt) after a reload/reattach. */
+  startedAt?: number;
   /** For a sleeping task: the id + label of the timer it's waiting on, so the
    *  client re-arms exactly that timer (not "the last one") when several exist. */
   timerId?: string;

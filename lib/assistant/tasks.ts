@@ -91,6 +91,9 @@ interface TaskRecord {
   items: ProjItem[];
   /** Sleeping tasks: epoch-ms wake time. */
   wakeAt?: number;
+  /** Sleeping tasks: epoch-ms the wait BEGAN (so the client's progress bar can
+   *  measure the whole wait — wakeAt − sleepStartedAt — across a reload). */
+  sleepStartedAt?: number;
   /** Sleeping tasks: the timer being waited on (so the client re-arms exactly
    *  this one, by id, instead of guessing "the last timer item"). */
   activeTimerId?: string;
@@ -325,6 +328,7 @@ async function drive(task: LiveTask, turns: ChatTurn[]): Promise<void> {
   task.status = 'running';
   task.sawError = false;
   task.wakeAt = undefined;
+  task.sleepStartedAt = undefined;
   task.activeTimerId = undefined;
   task.activeTimerLabel = undefined;
   const ctx = makeCtx(task);
@@ -357,7 +361,8 @@ async function drive(task: LiveTask, turns: ChatTurn[]): Promise<void> {
 
 function scheduleSleep(task: LiveTask, sleep: { seconds: number; label: string; id: string }): void {
   task.status = 'sleeping';
-  task.wakeAt = Date.now() + sleep.seconds * 1000;
+  task.sleepStartedAt = Date.now();
+  task.wakeAt = task.sleepStartedAt + sleep.seconds * 1000;
   task.activeTimerId = sleep.id;
   task.activeTimerLabel = sleep.label;
   emit(task, { type: 'sleep', until: task.wakeAt });
@@ -599,6 +604,7 @@ export function liveTaskStatus(chatId: string): TaskStatusDto | null {
     status: task.status,
     seq: task.seq,
     wakeAt: task.wakeAt,
+    startedAt: task.sleepStartedAt,
     timerId: task.activeTimerId,
     timerLabel: task.activeTimerLabel,
   };
@@ -612,6 +618,7 @@ export function liveTaskStatuses(): TaskStatusDto[] {
       status: t.status,
       seq: t.seq,
       wakeAt: t.wakeAt,
+      startedAt: t.sleepStartedAt,
       timerId: t.activeTimerId,
       timerLabel: t.activeTimerLabel,
     }));
@@ -634,6 +641,7 @@ interface PersistedTask {
   items: ProjItem[];
   seq: number;
   wakeAt?: number;
+  sleepStartedAt?: number;
   createdAt: number;
 }
 
@@ -661,6 +669,7 @@ function persist(): void {
         items: t.items,
         seq: t.seq,
         wakeAt: t.wakeAt,
+        sleepStartedAt: t.sleepStartedAt,
         createdAt: t.createdAt,
       });
     }
@@ -703,6 +712,7 @@ function loadOnce(): void {
       seq: typeof p.seq === 'number' ? p.seq : 0,
       items: Array.isArray(p.items) ? p.items : [],
       wakeAt: p.wakeAt,
+      sleepStartedAt: p.sleepStartedAt,
       createdAt: p.createdAt ?? now,
       updatedAt: now,
       subscribers: new Set(),

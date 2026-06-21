@@ -1239,7 +1239,7 @@ export function AssistantSidebar({
   // timer's widget, and keeps the one countdown pinned to the real wake time.
   const armServerTimer = useCallback(
     async (status: TaskStatusDto) => {
-      const { chatId, timerId, wakeAt, seq } = status;
+      const { chatId, timerId, wakeAt, startedAt, seq } = status;
       lastSeqRef.current.set(chatId, seq);
       const present =
         !!timerId && itemsRef.current.some((it) => it.kind === 'timer' && it.id === timerId);
@@ -1250,7 +1250,14 @@ export function AssistantSidebar({
         prev.map((it) => {
           if (it.kind !== 'timer') return it;
           if (timerId && it.id === timerId) {
-            return { ...it, status: 'running', endsAt: wakeAt ?? it.endsAt };
+            return {
+              ...it,
+              status: 'running',
+              endsAt: wakeAt ?? it.endsAt,
+              // Restore the progress-bar span from the server on reattach/reload;
+              // keep any startedAt the item already had if the server omits it.
+              startedAt: startedAt ?? it.startedAt,
+            };
           }
           return it.status === 'running' ? { ...it, status: 'done' } : it;
         }),
