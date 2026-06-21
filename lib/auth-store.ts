@@ -25,9 +25,29 @@ interface AuthState {
 const FILE = path.join(process.cwd(), 'data', 'auth-state.json');
 
 let mem: AuthState | null = null;
+// Mtime (ms) of the file backing `mem`. The cache must NOT be permanent: Next.js
+// runs the login server action, the API routes, and middleware in separate module
+// instances / worker processes, each with its own `mem`, all sharing this one
+// file. If `load()` cached forever (the old `if (mem) return mem`) on a
+// multi-instance deploy: (1) a TOTP step burned by one instance is invisible to
+// another, so the SAME code can be replayed on a different worker — breaking the
+// load-bearing single-use-TOTP invariant for both login and the destructive
+// re-auth gate; and (2) a "sign out everywhere" epoch bump only takes effect on
+// the instance that ran it. Re-reading on mtime change makes all instances
+// converge on the shared file. (See the same fix in lib/session-store.ts.)
+let memMtime = -1;
+
+function fileMtimeMs(): number {
+  try {
+    return fs.statSync(FILE).mtimeMs;
+  } catch {
+    return 0; // no file yet
+  }
+}
 
 function load(): AuthState {
-  if (mem) return mem;
+  const mtime = fileMtimeMs();
+  if (mem && mtime === memMtime) return mem;
   try {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Partial<AuthState>;
     mem = {
@@ -37,6 +57,7 @@ function load(): AuthState {
   } catch {
     mem = { epoch: 1, totpStep: -1 };
   }
+  memMtime = mtime;
   return mem;
 }
 
@@ -44,6 +65,7 @@ function persist(state: AuthState): void {
   try {
     fs.mkdirSync(path.dirname(FILE), { recursive: true });
     fs.writeFileSync(FILE, JSON.stringify(state));
+    memMtime = fileMtimeMs(); // our mem matches disk; don't re-read our own write
   } catch (err) {
     console.error('[auth] state write failed:', (err as Error)?.message ?? err);
   }

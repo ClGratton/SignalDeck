@@ -268,9 +268,22 @@ exists to prevent.) The four tiers:
 
 ### Known accepted limits (don't "fix" silently)
 
-- Throttle + replay state are per-process (single-instance deploy). If this app
-  ever runs multi-instance, move `lib/login-throttle.ts` + `lib/auth-store.ts`
-  to a shared store first.
+- **This deploy is effectively MULTI-INSTANCE** (Next.js runs the login server
+  action, the API routes, and middleware in separate module instances / worker
+  processes). The file-backed stores must therefore NOT cache their `mem`
+  permanently — `lib/session-store.ts` and `lib/auth-store.ts` re-read their JSON
+  on mtime change (and stamp their own writes' mtime so they don't re-read their
+  own data) so every instance converges on the one file. Do NOT reintroduce an
+  `if (mem) return mem` permanent cache: it caused a hard lockout (every device
+  but the one already on disk validated as "session expired", with stale
+  instances clobbering each other's sessions) and silently broke single-use TOTP
+  (a code burned on one worker was replayable on another) and "sign out
+  everywhere" (the epoch bump only hit the instance that ran it).
+- Residual (accepted for now): `lib/login-throttle.ts` is still per-process, so
+  the brute-force counter is per-worker (weaker, not broken). And the TOTP burn
+  is read-then-write, not atomic — the mtime re-read closes the persistent replay
+  window but a sub-millisecond CONCURRENT replay across two workers is still
+  theoretically possible; fully closing it needs an atomic file lock on the burn.
 - In LAN dev every client shares the 'local' throttle bucket (no proxy headers);
   in production Cloudflare's `cf-connecting-ip` separates clients.
 
