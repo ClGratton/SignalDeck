@@ -1400,11 +1400,12 @@ export function AssistantSidebar({
           await reattachResume(chatId);
           return;
         }
-        // A reverse-proxy gateway timeout (Cloudflare 524, or 502/503/504) killed
-        // the connection while holding the stream — but startTask already kicked
-        // the task off server-side, so it's RUNNING. Reattach instead of showing
-        // a dead "Request failed"; the heartbeat makes this rare to begin with.
-        if (res.status === 524 || res.status === 502 || res.status === 503 || res.status === 504) {
+        // A reverse-proxy / Cloudflare error killed the connection while holding the
+        // stream — but startTask already kicked the task off server-side, so it's
+        // RUNNING. Reattach instead of showing a dead "Request failed".
+        // 5xx: 502 Bad Gateway, 503 Unavailable, 504 Upstream Timeout, 524 CF Gateway Timeout
+        // CF-specific: 520 Unknown, 522 Connection Timeout, 523 Origin Unreachable
+        if ([502, 503, 504, 520, 522, 523, 524].includes(res.status)) {
           await reattachResume(chatId);
           return;
         }
