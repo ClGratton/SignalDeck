@@ -154,6 +154,39 @@
   }
 }
 
+/* ── Tile dashboard (data-driven grid; replaces the fixed grid-template-areas) ── */
+.gridArea {
+  min-width: 0;
+}
+.dashGrid {
+  display: grid;
+  gap: var(--space-sm);
+  align-items: stretch;
+  /* grid-template-columns comes inline from the layout (repeat(cols, 1fr)). */
+}
+.dashTile {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The panel inside a tile fills the tile so spans read as real size; its own
+   scroll regions (tableScroll/listScroll) handle overflow. */
+.dashTile > .panel {
+  flex: 1;
+  min-height: 0;
+}
+/* Narrow screens: the editable multi-column grid is a desktop affordance, so
+   collapse to a single column and stack tiles in layout order. */
+@media (max-width: 760px) {
+  .dashGrid {
+    grid-template-columns: 1fr !important;
+  }
+  .dashTile {
+    grid-column: 1 / -1 !important;
+    grid-row: auto !important;
+  }
+}
+
 .sidebarSlot {
   min-width: 0;
   height: 100%;

@@ -12,14 +12,9 @@ import { signOut, signOutEverywhere } from '@/app/dashboard/actions';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { RevealProvider } from './RevealProvider';
 import { SettingsPanel } from './SettingsPanel';
-import {
-  ComputePanel,
-  StoragePanel,
-  MediaPanel,
-  AutomationPanel,
-  TrafficPanel,
-  HistoryStrip,
-} from './panels';
+import { DashboardGrid } from './DashboardGrid';
+import { DashboardDataProvider } from './widgets';
+import { DEFAULT_LAYOUT, type DashboardLayout } from '@/lib/dashboard/types';
 import { AssistantSidebar } from './AssistantSidebar';
 import styles from './console.module.css';
 
@@ -37,6 +32,9 @@ export function ConsoleShell({
 }) {
   const [snapshot, setSnapshot] = useState<ConsoleSnapshot | null>(initial);
   const [stale, setStale] = useState(false);
+  // The tile layout: render the default instantly, then hydrate from the server
+  // (shared across devices, persisted) — same first-paint discipline as the rest.
+  const [layout, setLayout] = useState<DashboardLayout>(DEFAULT_LAYOUT);
   // Desktop: sidebar docked in the grid, collapse remembered. Mobile: overlay.
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -46,6 +44,21 @@ export function ConsoleShell({
   useEffect(() => {
     const saved = window.localStorage.getItem(SIDEBAR_KEY);
     if (saved != null) setSidebarOpen(saved === '1');
+  }, []);
+
+  // Pull the saved tile layout once on mount (falls back to the default already
+  // on screen if it's never been customized or the request fails).
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/dashboard/layout', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { layout?: DashboardLayout } | null) => {
+        if (alive && d?.layout) setLayout(d.layout);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const poll = useCallback(async () => {
@@ -144,13 +157,10 @@ export function ConsoleShell({
       </header>
 
       <div className={styles.body}>
-        <main className={styles.grid} aria-label="Homelab panels">
-          <ComputePanel data={snapshot?.proxmox ?? null} loading={loading} />
-          <StoragePanel data={snapshot?.truenas ?? null} loading={loading} />
-          <MediaPanel data={snapshot?.jellyfin ?? null} loading={loading} />
-          <AutomationPanel data={snapshot?.homeassistant ?? null} loading={loading} />
-          <TrafficPanel />
-          <HistoryStrip />
+        <main className={styles.gridArea} aria-label="Homelab dashboard">
+          <DashboardDataProvider value={{ snapshot, loading }}>
+            <DashboardGrid layout={layout} />
+          </DashboardDataProvider>
         </main>
 
         <div className={styles.sidebarSlot}>
