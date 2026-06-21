@@ -283,6 +283,21 @@ exists to prevent.) The four tiers:
 
 ### Known accepted limits (don't "fix" silently)
 
+- **ALL `data/` writes go through `writeFileAtomic` (`lib/atomic-write.ts`) —
+  never a bare `fs.writeFileSync` on a `data/` file.** This is load-bearing, not
+  cosmetic. It writes a temp file in the same dir then `rename`s over the target;
+  `rename(2)` needs permission on the DIRECTORY, not the existing file, so it
+  REPLACES a file the app can't overwrite with one it owns. This is the fix for
+  the RECURRING login bug (happened twice): files left over from an earlier
+  container generation that ran as ROOT are root-owned, the app now runs non-root
+  and a plain `writeFileSync` OVER them throws `EACCES`. The session store
+  swallows that error → a fresh login never persists to the registry → the cookie
+  is set but `/dashboard`'s registry check fails → the user is bounced straight
+  back to `/login` ("I log in, dashboard never shows"); the settings store
+  rethrew → bare 500. The atomic write self-heals on the next write. If you add a
+  new file-backed store, it MUST use `writeFileAtomic`. The deeper fallback (even
+  the DIRECTORY isn't app-writable) needs a `chown` of the data volume — the
+  symptom there is the `EACCES`/`EROFS` that `setOverride` now surfaces.
 - **This deploy is effectively MULTI-INSTANCE** (Next.js runs the login server
   action, the API routes, and middleware in separate module instances / worker
   processes). The file-backed stores must therefore NOT cache their `mem`
