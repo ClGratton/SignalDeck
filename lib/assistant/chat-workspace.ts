@@ -16,6 +16,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 import { randomUUID } from 'node:crypto';
 import type {
   ChatNoteDto,
@@ -52,8 +53,7 @@ function read(): Store {
 function write(store: Store): void {
   cached = store;
   try {
-    fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(store, null, 2), 'utf8');
+    writeFileAtomic(FILE, JSON.stringify(store, null, 2));
   } catch {
     /* best-effort; the in-memory cache still holds it */
   }

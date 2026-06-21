@@ -11,6 +11,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 import { randomUUID } from 'node:crypto';
 
 export interface MemoryNote {
@@ -45,8 +46,7 @@ function read(): MemoryNote[] {
 
 function write(notes: MemoryNote[]): void {
   try {
-    fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(notes, null, 2), 'utf8');
+    writeFileAtomic(FILE, JSON.stringify(notes, null, 2));
   } catch {
     /* best-effort; memory cache still holds it */
   }

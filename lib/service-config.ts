@@ -15,6 +15,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 
 export interface ServiceField {
   name: string; // the env-var name
@@ -146,8 +147,7 @@ function readOverrides(): Record<string, string> {
 }
 
 function writeOverrides(next: Record<string, string>): void {
-  fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(next, null, 2), 'utf8');
+  writeFileAtomic(FILE, JSON.stringify(next, null, 2));
   overrides = next;
   try {
     overridesMtime = fs.statSync(FILE).mtimeMs;
@@ -181,13 +181,24 @@ export function fieldSource(name: string): ConfigSource {
   return e != null && e !== '' ? 'env' : null;
 }
 
-/** Set/replace an override value (or clear it when empty → falls back to env). */
+/** Set/replace an override value (or clear it when empty → falls back to env).
+ *  Returns a human error string on failure (never throws → the route returns a
+ *  clean 400 with the reason instead of a bare 500). */
 export function setOverride(name: string, value: string): string | null {
   if (!FIELD_NAMES.has(name)) return 'Unknown setting.';
   const next = { ...readOverrides() };
   if (value.trim() === '') delete next[name];
   else next[name] = value.trim();
-  writeOverrides(next);
+  try {
+    writeOverrides(next);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    console.error(`[settings] write failed for ${name}:`, e?.code ?? e?.message ?? e);
+    // Surface the cause — EACCES/EROFS means data/ isn't writable by the app user
+    // (commonly files left root-owned by an earlier container); the atomic write
+    // normally heals that, so a lingering EACCES points at the dir itself.
+    return `Could not save (${e?.code ?? 'write error'}). The data/ directory may not be writable by the app.`;
+  }
   console.warn(`[settings] backend credential updated: ${name}`);
   return null;
 }

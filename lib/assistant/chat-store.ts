@@ -19,6 +19,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 
 export interface StoredChatRecord {
   id: string;
@@ -120,8 +121,7 @@ function persistCollection(coll: ChatCollection): { ok: boolean; detail: string 
   // Cache regardless, so an in-memory write survives a transient disk failure.
   cached = coll;
   try {
-    fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, json, 'utf8');
+    writeFileAtomic(FILE, json);
     return { ok: true, detail: 'Saved.' };
   } catch {
     return { ok: false, detail: 'Could not persist chats to disk.' };

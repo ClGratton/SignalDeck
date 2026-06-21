@@ -14,6 +14,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 import type { AssistantProvider } from '@/lib/assistant/types';
 
 export interface ProviderDef {
@@ -93,8 +94,7 @@ function readStored(): Partial<Record<AssistantProvider, StoredEntry>> {
 }
 
 function writeStored(next: Partial<Record<AssistantProvider, StoredEntry>>): void {
-  fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(next, null, 2), 'utf8');
+  writeFileAtomic(FILE, JSON.stringify(next, null, 2));
   stored = next;
 }
 

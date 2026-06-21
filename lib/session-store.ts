@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { cfg } from '@/lib/service-config';
+import { writeFileAtomic } from '@/lib/atomic-write';
 
 export interface SessionRecord {
   id: string;
@@ -82,8 +83,7 @@ function persist(force = false): void {
   if (!force && now - lastPersist < PERSIST_MIN_INTERVAL_MS) return;
   lastPersist = now;
   try {
-    fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(mem ?? []));
+    writeFileAtomic(FILE, JSON.stringify(mem ?? []));
     // Our `mem` now matches disk; record the mtime so the next load() doesn't
     // needlessly re-read our own write (only ANOTHER instance's write re-reads).
     memMtime = fileMtimeMs();

@@ -16,6 +16,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 
 interface AuthState {
   epoch: number;
@@ -63,8 +64,7 @@ function load(): AuthState {
 
 function persist(state: AuthState): void {
   try {
-    fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(state));
+    writeFileAtomic(FILE, JSON.stringify(state));
     memMtime = fileMtimeMs(); // our mem matches disk; don't re-read our own write
   } catch (err) {
     console.error('[auth] state write failed:', (err as Error)?.message ?? err);

@@ -14,6 +14,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 import type { AssistantProvider, ModelOption } from '@/lib/assistant/types';
 import { getProviderKey, getProviderBaseUrl, providerDef, PROVIDERS } from '@/lib/assistant/keys';
 import { cfg } from '@/lib/service-config';
@@ -98,8 +99,7 @@ function readCatalog(): CatalogFile {
 
 function writeCatalog(next: CatalogFile): void {
   try {
-    fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(next, null, 2), 'utf8');
+    writeFileAtomic(FILE, JSON.stringify(next, null, 2));
   } catch {
     /* disk write is best-effort; memory cache still holds it */
   }

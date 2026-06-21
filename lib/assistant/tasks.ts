@@ -28,6 +28,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 import { runAnthropicTurn } from '@/lib/assistant/anthropic';
 import { runGeminiTurn } from '@/lib/assistant/gemini';
 import { runOpenAiTurn } from '@/lib/assistant/openai';
@@ -674,8 +675,7 @@ function persist(): void {
       });
     }
     try {
-      fs.mkdirSync(path.dirname(PERSIST_FILE), { recursive: true });
-      fs.writeFileSync(PERSIST_FILE, JSON.stringify(out), 'utf8');
+      writeFileAtomic(PERSIST_FILE, JSON.stringify(out));
     } catch {
       /* best-effort */
     }

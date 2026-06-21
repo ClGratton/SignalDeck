@@ -87,6 +87,13 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       setDraft(f.name, { revealed: false });
       return;
     }
+    // Nothing stored to reveal — don't make the operator pass the re-auth gate
+    // just to be told "Not set." Say it up front (the eye is only reachable here
+    // when they've typed an UNSAVED value).
+    if (!f.source) {
+      setDraft(f.name, { error: 'Nothing saved yet — save a value first, then reveal.' });
+      return;
+    }
     const value = await reveal('/api/settings/reveal', { name: f.name });
     if (value != null) setDraft(f.name, { value, revealed: true, dirty: false });
   };

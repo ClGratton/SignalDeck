@@ -16,6 +16,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '@/lib/atomic-write';
 import type { SystemHealth } from '@/lib/config';
 import { entryLevel, entryMins, type DayDetail, type HistoryRecord, type RecordedLevel } from '@/lib/history';
 
@@ -54,8 +55,7 @@ function load(): HistoryRecord {
 
 function persist(rec: HistoryRecord): void {
   try {
-    fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(rec));
+    writeFileAtomic(FILE, JSON.stringify(rec));
   } catch (err) {
     console.error('[history] write failed:', (err as Error)?.message ?? err);
   }
