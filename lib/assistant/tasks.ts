@@ -95,6 +95,8 @@ interface TaskRecord {
   /** Sleeping tasks: epoch-ms the wait BEGAN (so the client's progress bar can
    *  measure the whole wait — wakeAt − sleepStartedAt — across a reload). */
   sleepStartedAt?: number;
+  /** Throttle stamp for streaming the in-progress transcript to the chat store. */
+  lastPersist?: number;
   /** Sleeping tasks: the timer being waited on (so the client re-arms exactly
    *  this one, by id, instead of guessing "the last timer item"). */
   activeTimerId?: string;
@@ -136,6 +138,17 @@ function emit(task: LiveTask, event: AssistantEvent): void {
   if (task.log.length > MAX_LOG) task.log.splice(0, task.log.length - MAX_LOG);
   project(task, event);
   task.updatedAt = Date.now();
+  // Keep disk fresh AS THE RUN PROGRESSES: the task file (so a restart can RESUME
+  // from a recent point) and the chat store (so a detached / other-device client
+  // sees progress without waiting for the turn to end). persist() is debounced;
+  // writeTurn is throttled so a token-by-token stream doesn't rewrite the whole
+  // chats file on every delta.
+  persist();
+  const now = task.updatedAt;
+  if (now - (task.lastPersist ?? 0) > 2500) {
+    task.lastPersist = now;
+    writeTurn(task);
+  }
   for (const sub of task.subscribers) {
     try {
       sub(frame);
@@ -730,11 +743,23 @@ function loadOnce(): void {
       const delay = Math.max(0, task.wakeAt! - now);
       task.timer = setTimeout(() => resume(task, label, id), delay);
     } else {
-      // running/awaiting can't be resumed (the in-flight fn is gone) — record
-      // the interruption in the chat store so the operator isn't left hanging.
+      // Running at the restart: the in-flight async fn is gone, but its WORK SO
+      // FAR is persisted (items). RESUME instead of abandoning — re-invoke the
+      // agent with the conversation + everything it has done up to the last
+      // checkpoint, so it continues on its own (the operator may be offline). The
+      // nudge tells it to re-check state before repeating any action it can't be
+      // sure finished (the only un-persisted gap is the single in-flight step).
       tasks.set(task.chatId, task);
-      emit(task, { type: 'error', message: 'Interrupted by a server restart — ask again to continue.' });
-      finalize(task, 'error');
+      const resumeTurns = mergeConsecutive([
+        ...task.turns,
+        ...turnsFromItems(task.items),
+        {
+          role: 'user',
+          content:
+            'Resuming after a server restart — the previous step may have been interrupted before finishing. Continue from where you left off; before any action you are not certain completed, re-check the current state first.',
+        },
+      ]);
+      void drive(task, resumeTurns);
     }
   }
 }

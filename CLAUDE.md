@@ -181,10 +181,17 @@ it there, never by re-coupling the result to the connection.
   the result. The client must NOT clobber a task-owned chat: `chat-store.ts`
   guards it on the collection `PUT`, and the client omits server-owned chats from
   its push (`serverOwnedRef`).
-- Non-terminal tasks are persisted (`data/assistant-tasks.json`, gitignored): a
-  SLEEPING timer reschedules after a restart/redeploy; a task that was mid-RUN at
-  a crash can't be resumed (you can't serialize a running async fn) and is marked
-  errored. Same single-instance limit as the login throttle.
+- Non-terminal tasks are persisted (`data/assistant-tasks.json`, gitignored) and
+  RESUME across a restart/redeploy: a SLEEPING timer reschedules; a task that was
+  mid-RUN is re-driven from its last persisted checkpoint (`loadOnce` rebuilds the
+  turns from the saved items + a "re-check before repeating" nudge and calls
+  `drive` again). The in-flight async fn itself can't be serialized, so the agent
+  continues from the last saved step — which is why `emit` streams the transcript
+  to disk AS IT GOES (debounced task-file `persist()` + throttled `writeTurn`),
+  keeping the resume point recent (and making progress visible to a detached /
+  other-device client). The only gap is the single un-persisted in-flight step,
+  which the nudge tells the model to re-verify. Same single-instance limit as the
+  login throttle.
 - `/api/assistant/oneshot` is the EPHEMERAL exception: a request-scoped turn (Ask
   mode, raw events, dies with the request) for `/compact`, which has no durable
   result. Don't route durable turns through it, or task survival is lost.
