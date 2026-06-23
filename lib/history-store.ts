@@ -42,20 +42,32 @@ function dateKey(d: Date): string {
 // In-memory mirror so reads don't hit disk on every page load. Written through on
 // change. Survives within a server process; rebuilt from disk on cold start.
 let mem: HistoryRecord | null = null;
+let memMtime = -1; // re-read on mtime change (multi-instance — see chat-store.ts)
+
+function fileMtimeMs(): number {
+  try {
+    return fs.statSync(FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 function load(): HistoryRecord {
-  if (mem) return mem;
+  const mtime = fileMtimeMs();
+  if (mem && mtime === memMtime) return mem;
   try {
     mem = JSON.parse(fs.readFileSync(FILE, 'utf8')) as HistoryRecord;
   } catch {
     mem = {}; // missing/corrupt file → start fresh, no fake data
   }
+  memMtime = mtime;
   return mem;
 }
 
 function persist(rec: HistoryRecord): void {
   try {
     writeFileAtomic(FILE, JSON.stringify(rec));
+    memMtime = fileMtimeMs();
   } catch (err) {
     console.error('[history] write failed:', (err as Error)?.message ?? err);
   }

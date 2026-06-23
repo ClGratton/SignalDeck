@@ -38,15 +38,26 @@ const NOTE_CHARS = 300;
 const STEP_CHARS = 160;
 
 let cached: Store | null = null;
+let cachedMtime = -1; // re-read on mtime change (multi-instance — see chat-store.ts)
+
+function fileMtimeMs(): number {
+  try {
+    return fs.statSync(FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 function read(): Store {
-  if (cached) return cached;
+  const mtime = fileMtimeMs();
+  if (cached && mtime === cachedMtime) return cached;
   try {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8')) as unknown;
     cached = raw && typeof raw === 'object' ? (raw as Store) : {};
   } catch {
     cached = {};
   }
+  cachedMtime = mtime;
   return cached;
 }
 
@@ -54,6 +65,7 @@ function write(store: Store): void {
   cached = store;
   try {
     writeFileAtomic(FILE, JSON.stringify(store, null, 2));
+    cachedMtime = fileMtimeMs();
   } catch {
     /* best-effort; the in-memory cache still holds it */
   }

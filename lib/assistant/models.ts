@@ -86,20 +86,32 @@ const FALLBACK: Record<AssistantProvider, CatalogModel[]> = {
 };
 
 let catalog: CatalogFile | null = null;
+let catalogMtime = -1; // re-read on mtime change (multi-instance — see chat-store.ts)
+
+function fileMtimeMs(): number {
+  try {
+    return fs.statSync(FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 function readCatalog(): CatalogFile {
-  if (catalog) return catalog;
+  const mtime = fileMtimeMs();
+  if (catalog && mtime === catalogMtime) return catalog;
   try {
     catalog = JSON.parse(fs.readFileSync(FILE, 'utf8')) as CatalogFile;
   } catch {
     catalog = {};
   }
+  catalogMtime = mtime;
   return catalog;
 }
 
 function writeCatalog(next: CatalogFile): void {
   try {
     writeFileAtomic(FILE, JSON.stringify(next, null, 2));
+    catalogMtime = fileMtimeMs();
   } catch {
     /* disk write is best-effort; memory cache still holds it */
   }

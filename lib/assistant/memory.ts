@@ -25,9 +25,19 @@ const MAX_NOTES = 60;
 const MAX_CHARS = 400;
 
 let cached: MemoryNote[] | null = null;
+let cachedMtime = -1; // re-read on mtime change (multi-instance — see chat-store.ts)
+
+function fileMtimeMs(): number {
+  try {
+    return fs.statSync(FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 function read(): MemoryNote[] {
-  if (cached) return cached;
+  const mtime = fileMtimeMs();
+  if (cached && mtime === cachedMtime) return cached;
   try {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8')) as unknown;
     cached = Array.isArray(raw)
@@ -41,12 +51,14 @@ function read(): MemoryNote[] {
   } catch {
     cached = [];
   }
+  cachedMtime = mtime;
   return cached;
 }
 
 function write(notes: MemoryNote[]): void {
   try {
     writeFileAtomic(FILE, JSON.stringify(notes, null, 2));
+    cachedMtime = fileMtimeMs();
   } catch {
     /* best-effort; memory cache still holds it */
   }

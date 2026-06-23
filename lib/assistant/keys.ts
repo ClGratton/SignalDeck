@@ -69,9 +69,19 @@ interface StoredEntry {
 }
 
 let stored: Partial<Record<AssistantProvider, StoredEntry>> | null = null;
+let storedMtime = -1; // re-read on mtime change (multi-instance — see chat-store.ts)
+
+function fileMtimeMs(): number {
+  try {
+    return fs.statSync(FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 function readStored(): Partial<Record<AssistantProvider, StoredEntry>> {
-  if (stored) return stored;
+  const mtime = fileMtimeMs();
+  if (stored && mtime === storedMtime) return stored;
   try {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Record<string, unknown>;
     stored = {};
@@ -90,12 +100,14 @@ function readStored(): Partial<Record<AssistantProvider, StoredEntry>> {
   } catch {
     stored = {};
   }
+  storedMtime = mtime;
   return stored;
 }
 
 function writeStored(next: Partial<Record<AssistantProvider, StoredEntry>>): void {
   writeFileAtomic(FILE, JSON.stringify(next, null, 2));
   stored = next;
+  storedMtime = fileMtimeMs();
 }
 
 function envKey(provider: AssistantProvider): string | null {

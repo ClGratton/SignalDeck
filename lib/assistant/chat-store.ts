@@ -45,6 +45,23 @@ const MAX_ITEMS_PER_CHAT = 1000;
 const MAX_JSON_CHARS = 4_000_000;
 
 let cached: ChatCollection | null = null;
+// Mtime of the file backing `cached`. MUST NOT be a permanent cache: this deploy
+// is multi-instance (see CLAUDE.md), and a chat the agent TASK advances on one
+// worker is invisible to a `readChats()` on another worker if it serves a frozen
+// `cached` — the symptom was "I worked on this chat from another PC, came back,
+// and the transcript is stuck 33h ago while the task is still running." Re-read on
+// mtime change so every worker (and the live-task clobber guard below, which
+// reads `prior` here) sees the one true file. The atomic write makes the re-read
+// safe — a reader never catches a half-written file.
+let cachedMtime = -1;
+
+function fileMtimeMs(): number {
+  try {
+    return fs.statSync(FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 // A chat with a LIVE server-side agent task is owned by the task runner, which
 // writes that chat's in-progress turn as it goes. A client PUT sends the WHOLE
@@ -85,12 +102,14 @@ function coerce(raw: unknown): ChatCollection {
 }
 
 export function readChats(): ChatCollection {
-  if (cached) return cached;
+  const mtime = fileMtimeMs();
+  if (cached && mtime === cachedMtime) return cached;
   try {
     cached = coerce(JSON.parse(fs.readFileSync(FILE, 'utf8')) as unknown);
   } catch {
     cached = { activeId: null, chats: [] };
   }
+  cachedMtime = mtime;
   return cached;
 }
 
@@ -122,6 +141,7 @@ function persistCollection(coll: ChatCollection): { ok: boolean; detail: string 
   cached = coll;
   try {
     writeFileAtomic(FILE, json);
+    cachedMtime = fileMtimeMs(); // our cache matches disk; don't re-read our own write
     return { ok: true, detail: 'Saved.' };
   } catch {
     return { ok: false, detail: 'Could not persist chats to disk.' };
