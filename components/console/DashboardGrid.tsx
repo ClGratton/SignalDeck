@@ -16,9 +16,20 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Minus, Plus, X } from 'lucide-react';
 import { widgetById, WIDGETS } from './widgets';
-import { applyMove, fitResize, freeSize, setCols, setRows, removeTile, addTile } from '@/lib/dashboard/reflow';
+import {
+  applyMove,
+  resizeEdgeBy,
+  canResizeEdge,
+  setCols,
+  setRows,
+  removeTile,
+  addTile,
+  type Edge,
+} from '@/lib/dashboard/reflow';
 import type { DashboardLayout, Tile } from '@/lib/dashboard/types';
 import styles from './console.module.css';
+
+const EDGES: Edge[] = ['l', 'r', 't', 'b'];
 
 const ROW_REM = 13.5; // cell height
 const GAP_REM = 0.75; // matches --space-sm
@@ -32,7 +43,7 @@ interface Metrics {
 }
 interface DragState {
   kind: 'move' | 'resize';
-  axis?: 'e' | 's';
+  edge?: Edge;
   id: string;
   base: DashboardLayout;
   startX: number;
@@ -99,7 +110,7 @@ export function DashboardGrid({
   });
 
   const beginDrag = useCallback(
-    (kind: 'move' | 'resize', axis: 'e' | 's' | undefined, id: string, e: React.PointerEvent) => {
+    (kind: 'move' | 'resize', edge: Edge | undefined, id: string, e: React.PointerEvent) => {
       if (!editing || isNarrow) return;
       const tile = layout.tiles.find((t) => t.id === id);
       if (!tile) return;
@@ -108,7 +119,7 @@ export function DashboardGrid({
       const r = rectOf(tile);
       const s: DragState = {
         kind,
-        axis,
+        edge,
         id,
         base: layout,
         startX: e.clientX,
@@ -146,12 +157,16 @@ export function DashboardGrid({
         previewRef.current = next;
         setPreview(next);
         setDrag({ ...s });
-      } else {
-        const dw = Math.round(dx / stepX);
-        const dh = Math.round(dy / stepY);
-        const reqW = s.axis === 'e' ? s.oW + dw : s.oW;
-        const reqH = s.axis === 's' ? s.oH + dh : s.oH;
-        const next = fitResize(s.base, s.id, reqW, reqH, w?.minW ?? 1, w?.minH ?? 1);
+      } else if (s.edge) {
+        // Steps along the edge's axis; growing means dragging AWAY from the tile
+        // (right/down = +, left/up = +, since each edge grows outward).
+        const edge = s.edge;
+        const steps =
+          edge === 'r' ? Math.round(dx / stepX)
+          : edge === 'l' ? -Math.round(dx / stepX)
+          : edge === 'b' ? Math.round(dy / stepY)
+          : -Math.round(dy / stepY); // 't'
+        const next = resizeEdgeBy(s.base, s.id, edge, steps, w?.minW ?? 1, w?.minH ?? 1);
         previewRef.current = next;
         setPreview(next);
       }
@@ -175,13 +190,11 @@ export function DashboardGrid({
 
   const stepCols = (d: number) => onChange?.(setCols(layout, layout.cols + d));
   const stepRows = (d: number) => onChange?.(setRows(layout, layout.rows + d));
-  const resizeStep = (id: string, axis: 'e' | 's', d: number) => {
+  const resizeStep = (id: string, edge: Edge, dir: 1 | -1) => {
     const t = layout.tiles.find((x) => x.id === id);
     const w = widgetById(t?.widget ?? '');
     if (!t) return;
-    onChange?.(
-      fitResize(layout, id, axis === 'e' ? t.w + d : t.w, axis === 's' ? t.h + d : t.h, w?.minW ?? 1, w?.minH ?? 1),
-    );
+    onChange?.(resizeEdgeBy(layout, id, edge, dir, w?.minW ?? 1, w?.minH ?? 1));
   };
   const addWidget = (id: string) => {
     const w = widgetById(id);
@@ -246,11 +259,13 @@ export function DashboardGrid({
           ? { left: drag!.left, top: drag!.top, width: r.width, height: r.height }
           : { left: r.left, top: r.top, width: r.width, height: r.height };
 
-        // Resize affordances availability (free-space aware).
-        const canShrinkW = t.w > widget.minW;
-        const canShrinkH = t.h > widget.minH;
-        const canGrowW = editing && freeSize(layout, t.id, t.w + 1, t.h, widget.minW, widget.minH).w > t.w;
-        const canGrowH = editing && freeSize(layout, t.id, t.w, t.h + 1, widget.minW, widget.minH).h > t.h;
+        const zoneClass: Record<Edge, string> = {
+          l: styles.zoneL,
+          r: styles.zoneR,
+          t: styles.zoneT,
+          b: styles.zoneB,
+        };
+        const edgeLabel: Record<Edge, string> = { l: 'left', r: 'right', t: 'top', b: 'bottom' };
 
         return (
           <div
@@ -276,51 +291,51 @@ export function DashboardGrid({
                   <X size={14} strokeWidth={2.4} />
                 </button>
 
-                {/* Right edge — width. Dot with expanded hover zone reveals −/+. */}
-                {canShrinkW || canGrowW ? (
-                <span className={`${styles.handleZone} ${styles.zoneE}`}>
-                  <span
-                    className={styles.handleDot}
-                    onPointerDown={(e) => beginDrag('resize', 'e', t.id, e)}
-                    aria-hidden
-                  />
-                  <span className={styles.handleBtns}>
-                    {canShrinkW ? (
-                      <button type="button" className={styles.handleBtn} onPointerDown={(e) => e.stopPropagation()} onClick={() => resizeStep(t.id, 'e', -1)} aria-label={`Narrow ${widget.name}`}>
-                        <Minus size={14} strokeWidth={2.6} />
-                      </button>
-                    ) : null}
-                    {canGrowW ? (
-                      <button type="button" className={styles.handleBtn} onPointerDown={(e) => e.stopPropagation()} onClick={() => resizeStep(t.id, 'e', 1)} aria-label={`Widen ${widget.name}`}>
-                        <Plus size={14} strokeWidth={2.6} />
-                      </button>
-                    ) : null}
-                  </span>
-                </span>
-                ) : null}
-
-                {/* Bottom edge — height. */}
-                {canShrinkH || canGrowH ? (
-                <span className={`${styles.handleZone} ${styles.zoneS}`}>
-                  <span
-                    className={styles.handleDot}
-                    onPointerDown={(e) => beginDrag('resize', 's', t.id, e)}
-                    aria-hidden
-                  />
-                  <span className={styles.handleBtns}>
-                    {canShrinkH ? (
-                      <button type="button" className={styles.handleBtn} onPointerDown={(e) => e.stopPropagation()} onClick={() => resizeStep(t.id, 's', -1)} aria-label={`Shorten ${widget.name}`}>
-                        <Minus size={14} strokeWidth={2.6} />
-                      </button>
-                    ) : null}
-                    {canGrowH ? (
-                      <button type="button" className={styles.handleBtn} onPointerDown={(e) => e.stopPropagation()} onClick={() => resizeStep(t.id, 's', 1)} aria-label={`Taller ${widget.name}`}>
-                        <Plus size={14} strokeWidth={2.6} />
-                      </button>
-                    ) : null}
-                  </span>
-                </span>
-                ) : null}
+                {/* A dot on every edge (always shown). Hover reveals −/+ ONLY where
+                    a resize is possible: + when it can grow that side, − when it can
+                    shrink; both stay centered on the dot. L/R buttons sit
+                    horizontally, T/B vertically (per the design). */}
+                {EDGES.map((edge) => {
+                  const canGrow = canResizeEdge(layout, t.id, edge, 1, widget.minW, widget.minH);
+                  const canShrink = canResizeEdge(layout, t.id, edge, -1, widget.minW, widget.minH);
+                  return (
+                    <span
+                      key={edge}
+                      className={`${styles.handleZone} ${zoneClass[edge]}`}
+                      data-active={canGrow || canShrink || undefined}
+                    >
+                      <span
+                        className={styles.handleDot}
+                        onPointerDown={(e) => beginDrag('resize', edge, t.id, e)}
+                        aria-hidden
+                      />
+                      <span className={styles.handleBtns}>
+                        {canShrink ? (
+                          <button
+                            type="button"
+                            className={styles.handleBtn}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={() => resizeStep(t.id, edge, -1)}
+                            aria-label={`Shrink ${widget.name} from ${edgeLabel[edge]}`}
+                          >
+                            <Minus size={14} strokeWidth={2.6} />
+                          </button>
+                        ) : null}
+                        {canGrow ? (
+                          <button
+                            type="button"
+                            className={styles.handleBtn}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={() => resizeStep(t.id, edge, 1)}
+                            aria-label={`Grow ${widget.name} ${edgeLabel[edge]}`}
+                          >
+                            <Plus size={14} strokeWidth={2.6} />
+                          </button>
+                        ) : null}
+                      </span>
+                    </span>
+                  );
+                })}
               </>
             ) : null}
           </div>

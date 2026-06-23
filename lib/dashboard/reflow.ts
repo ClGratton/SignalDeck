@@ -145,6 +145,79 @@ export function fitResize(
   return { ...layout, rows, tiles };
 }
 
+// ── Per-edge resize (free space only; the grid grows rows downward) ───────────
+export type Edge = 'l' | 'r' | 't' | 'b';
+
+/** Whether a tile can resize on `edge` in `dir` (+1 grow, −1 shrink) — i.e. the
+ *  − shows only when shrink is possible and the + only when grow is. */
+export function canResizeEdge(
+  layout: DashboardLayout,
+  id: string,
+  edge: Edge,
+  dir: 1 | -1,
+  minW = 1,
+  minH = 1,
+): boolean {
+  const t = layout.tiles.find((x) => x.id === id);
+  if (!t) return false;
+  const others = layout.tiles.filter((x) => x.id !== id);
+  const free = (cx: number, cy: number) =>
+    !others.some((o) => cx >= o.x && cx < o.x + o.w && cy >= o.y && cy < o.y + o.h);
+  const colFree = (cx: number) => {
+    for (let cy = t.y; cy < t.y + t.h; cy++) if (!free(cx, cy)) return false;
+    return true;
+  };
+  const rowFree = (cy: number) => {
+    for (let cx = t.x; cx < t.x + t.w; cx++) if (!free(cx, cy)) return false;
+    return true;
+  };
+  if (dir === -1) return edge === 'l' || edge === 'r' ? t.w > minW : t.h > minH;
+  switch (edge) {
+    case 'r':
+      return t.x + t.w < layout.cols && colFree(t.x + t.w);
+    case 'l':
+      return t.x > 0 && colFree(t.x - 1);
+    case 't':
+      return t.y > 0 && rowFree(t.y - 1);
+    case 'b':
+      return rowFree(t.y + t.h); // beyond the last row is empty → grid grows
+  }
+}
+
+function edgeStep(t: Tile, edge: Edge, dir: 1 | -1): Tile {
+  switch (edge) {
+    case 'r':
+      return { ...t, w: t.w + dir };
+    case 'l':
+      return { ...t, x: t.x - dir, w: t.w + dir };
+    case 't':
+      return { ...t, y: t.y - dir, h: t.h + dir };
+    case 'b':
+      return { ...t, h: t.h + dir };
+  }
+}
+
+/** Resize a tile by `steps` cells on one edge, stopping the moment it can't go
+ *  further (free space / grid bounds / min size). No pushing. */
+export function resizeEdgeBy(
+  layout: DashboardLayout,
+  id: string,
+  edge: Edge,
+  steps: number,
+  minW = 1,
+  minH = 1,
+): DashboardLayout {
+  if (!steps) return layout;
+  const dir: 1 | -1 = steps > 0 ? 1 : -1;
+  let cur = layout;
+  for (let i = 0; i < Math.abs(steps); i++) {
+    if (!canResizeEdge(cur, id, edge, dir, minW, minH)) break;
+    cur = { ...cur, tiles: cur.tiles.map((t) => (t.id === id ? edgeStep(t, edge, dir) : t)) };
+  }
+  const rows = Math.max(layout.rows, ...cur.tiles.map((t) => t.y + t.h), 1);
+  return { ...cur, rows };
+}
+
 /** Change the column count: clamp tiles that now stick out (shrink, then shove
  *  left), and reflow. Growing columns just leaves room on the right. */
 export function setCols(layout: DashboardLayout, cols: number): DashboardLayout {
