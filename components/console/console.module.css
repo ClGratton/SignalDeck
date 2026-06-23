@@ -159,32 +159,245 @@
   min-width: 0;
 }
 .dashGrid {
+  --tile-row: 13.5rem; /* uniform cell height — what makes a span an actual size */
   display: grid;
   gap: var(--space-sm);
+  grid-auto-rows: var(--tile-row);
   align-items: stretch;
   /* grid-template-columns comes inline from the layout (repeat(cols, 1fr)). */
 }
 .dashTile {
+  position: relative;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* a tile is a fixed cell rectangle; its panel scrolls inside */
 }
-/* The panel inside a tile fills the tile so spans read as real size; its own
-   scroll regions (tableScroll/listScroll) handle overflow. */
+/* The panel fills the tile so spans read as real size; its scroll region flexes
+   to fill the leftover height and scrolls there (no fixed max-height in a tile). */
 .dashTile > .panel {
   flex: 1;
+  height: 100%;
   min-height: 0;
 }
 /* Narrow screens: the editable multi-column grid is a desktop affordance, so
    collapse to a single column and stack tiles in layout order. */
 @media (max-width: 760px) {
-  .dashGrid {
+  .dashGrid:not([data-editing]) {
     grid-template-columns: 1fr !important;
   }
-  .dashTile {
+  .dashGrid:not([data-editing]) .dashTile {
     grid-column: 1 / -1 !important;
     grid-row: auto !important;
   }
+}
+
+/* ── Edit mode ──────────────────────────────────────────────────────────────── */
+.editWrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.editTopBar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+.editRow {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-sm);
+}
+.editRow .dashGrid {
+  flex: 1;
+  min-width: 0;
+}
+/* Column stepper (top) + row rail (side) share a pill look. */
+.stepper,
+.rowRail {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.2rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+.rowRail {
+  flex-direction: column;
+  align-self: flex-start;
+  position: sticky;
+  top: var(--space-sm);
+}
+.stepper button,
+.rowRail button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: none;
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.stepper button:hover:not(:disabled),
+.rowRail button:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.stepper button:disabled,
+.rowRail button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.stepVal {
+  padding: 0 0.4rem;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-align: center;
+}
+.editTopRight {
+  display: flex;
+  gap: var(--space-xs);
+}
+.addWidgetBtn,
+.editDone {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.7rem;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--accent);
+  color: var(--on-accent);
+  background: var(--accent);
+  cursor: pointer;
+}
+.addWidgetBtn:hover,
+.editDone:hover {
+  filter: brightness(1.05);
+}
+.picker {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(8rem, 1fr));
+  gap: 0.25rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+.pickerItem {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.6rem;
+  font-size: var(--text-sm);
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  text-align: left;
+}
+.pickerItem:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.pickerItem svg {
+  flex: none;
+  color: var(--accent-ink);
+}
+
+/* Tiles in edit mode: outline, grab cursor, and the on-tile controls. */
+.dashGrid[data-editing] .dashTile {
+  outline: 1px dashed color-mix(in oklch, var(--accent) 45%, var(--border-strong));
+  outline-offset: -1px;
+  border-radius: var(--radius-md);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.dashTile[data-dragging] {
+  z-index: 20;
+  cursor: grabbing;
+  outline-color: var(--accent);
+  box-shadow: var(--shadow-2);
+  opacity: 0.92;
+}
+/* Transparent layer over the panel so a drag doesn't hit the panel's innards. */
+.tileEditMask {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+}
+.tileGrab {
+  position: absolute;
+  top: 0.3rem;
+  left: 0.3rem;
+  z-index: 6;
+  color: var(--muted);
+  pointer-events: none;
+}
+.tileRemove {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--down-ink);
+  background: color-mix(in oklch, var(--down) 14%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--down) 35%, var(--border));
+  border-radius: 999px;
+  cursor: pointer;
+}
+.tileRemove:hover {
+  background: color-mix(in oklch, var(--down) 24%, var(--surface));
+}
+/* Android-style resize handles: small accent pucks on the edges + corner. */
+.tileHandle {
+  position: absolute;
+  z-index: 7;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+}
+.handleE {
+  width: 0.85rem;
+  height: 1.6rem;
+  right: -0.1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+.handleS {
+  width: 1.6rem;
+  height: 0.85rem;
+  bottom: -0.1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+.handleSE {
+  width: 1.1rem;
+  height: 1.1rem;
+  right: -0.1rem;
+  bottom: -0.1rem;
+  cursor: nwse-resize;
 }
 
 .sidebarSlot {
@@ -213,16 +426,13 @@
    itself stays free for the future click-to-open tailored dashboards. */
 .tableScroll,
 .listScroll {
+  /* Fill the leftover panel height inside a fixed-height tile and scroll there. */
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
-}
-.tableScroll {
-  max-height: 22rem;
-}
-.listScroll {
-  max-height: 15rem;
 }
 
 .panelHead {

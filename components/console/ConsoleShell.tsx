@@ -5,7 +5,7 @@
 // server had cached so first paint is instant.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, PanelRightOpen, Settings } from 'lucide-react';
+import { Bot, PanelRightOpen, Settings, LayoutGrid, Check } from 'lucide-react';
 import type { ConsoleSnapshot } from '@/lib/console';
 import type { AssistantProvider } from '@/lib/assistant/types';
 import { signOut, signOutEverywhere } from '@/app/dashboard/actions';
@@ -35,6 +35,21 @@ export function ConsoleShell({
   // The tile layout: render the default instantly, then hydrate from the server
   // (shared across devices, persisted) — same first-paint discipline as the rest.
   const [layout, setLayout] = useState<DashboardLayout>(DEFAULT_LAYOUT);
+  const [editing, setEditing] = useState(false);
+  const layoutSaveTimer = useRef<number | null>(null);
+  // Apply a layout edit locally at once, then debounce-persist it to the server
+  // (the source of truth across devices).
+  const saveLayout = useCallback((next: DashboardLayout) => {
+    setLayout(next);
+    if (layoutSaveTimer.current) window.clearTimeout(layoutSaveTimer.current);
+    layoutSaveTimer.current = window.setTimeout(() => {
+      void fetch('/api/dashboard/layout', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ layout: next }),
+      }).catch(() => undefined);
+    }, 500);
+  }, []);
   // Desktop: sidebar docked in the grid, collapse remembered. Mobile: overlay.
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -121,6 +136,21 @@ export function ConsoleShell({
           <ThemeToggle />
           <button
             type="button"
+            className={editing ? styles.editDone : styles.iconAction}
+            onClick={() => setEditing((v) => !v)}
+            aria-label={editing ? 'Done editing dashboard' : 'Edit dashboard'}
+            title={editing ? 'Done' : 'Edit dashboard layout'}
+          >
+            {editing ? (
+              <>
+                <Check size={16} strokeWidth={2.4} aria-hidden /> Done
+              </>
+            ) : (
+              <LayoutGrid size={16} strokeWidth={2.2} aria-hidden />
+            )}
+          </button>
+          <button
+            type="button"
             className={styles.iconAction}
             onClick={() => setSettingsOpen(true)}
             aria-label="Backend settings"
@@ -159,7 +189,7 @@ export function ConsoleShell({
       <div className={styles.body}>
         <main className={styles.gridArea} aria-label="Homelab dashboard">
           <DashboardDataProvider value={{ snapshot, loading }}>
-            <DashboardGrid layout={layout} />
+            <DashboardGrid layout={layout} editing={editing} onChange={saveLayout} />
           </DashboardDataProvider>
         </main>
 
