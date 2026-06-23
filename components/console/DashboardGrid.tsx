@@ -1,34 +1,49 @@
 'use client';
 
-// Renders a DashboardLayout as a CSS grid of uniform cells. In VIEW mode it's a
-// plain grid. In EDIT mode each tile is draggable and resizable (Android-style
-// handles), with column/row steppers and a widget picker; every change runs the
-// reflow engine (push-down + compact-up) and is reported via onChange, which the
-// shell debounce-saves to the server.
+// Renders a DashboardLayout. Tiles are ABSOLUTELY positioned (px rects computed
+// from their cell coords) rather than placed by CSS grid — that's what lets them
+// ANIMATE between slots, lets a dragged tile follow the cursor exactly while the
+// others reflow around it, and lets a resize grow smoothly. View mode is the same
+// layout without the edit chrome. Narrow screens fall back to a simple stack.
+//
+//  • move   = push/reflow (applyMove): the dragged tile follows the pointer, a
+//             placeholder shows its target cell, the rest animate out of the way.
+//  • resize = free space only (fitResize): grows into empty cells, stops at the
+//             grid edge or an occupied neighbour — never shoves anyone to a new
+//             row. Android-style handle: a dot whose −/+ appear on hover, with −
+//             hidden at min size and + hidden when there's no room to grow.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Minus, Plus, X, GripVertical } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Minus, Plus, X } from 'lucide-react';
 import { widgetById, WIDGETS } from './widgets';
-import { applyMove, applyResize, setCols, setRows, removeTile, addTile } from '@/lib/dashboard/reflow';
-import type { DashboardLayout } from '@/lib/dashboard/types';
+import { applyMove, fitResize, freeSize, setCols, setRows, removeTile, addTile } from '@/lib/dashboard/reflow';
+import type { DashboardLayout, Tile } from '@/lib/dashboard/types';
 import styles from './console.module.css';
 
-type DragKind = 'move' | 'resize';
+const ROW_REM = 13.5; // cell height
+const GAP_REM = 0.75; // matches --space-sm
+const NARROW = 760;
+
+interface Metrics {
+  cellW: number;
+  rowH: number;
+  gap: number;
+  width: number;
+}
 interface DragState {
-  kind: DragKind;
+  kind: 'move' | 'resize';
+  axis?: 'e' | 's';
   id: string;
-  /** The layout as it was when the drag began — the drag operates on this base. */
   base: DashboardLayout;
   startX: number;
   startY: number;
-  originX: number;
-  originY: number;
-  originW: number;
-  originH: number;
-  stepX: number;
-  stepY: number;
-  dx: number;
-  dy: number;
+  oLeft: number;
+  oTop: number;
+  oW: number;
+  oH: number;
+  // live float (move): the dragged tile's current px position under the pointer.
+  left: number;
+  top: number;
 }
 
 export function DashboardGrid({
@@ -41,62 +56,79 @@ export function DashboardGrid({
   onChange?: (next: DashboardLayout) => void;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
+  const [metrics, setMetrics] = useState<Metrics>({ cellW: 0, rowH: 0, gap: 0, width: 0 });
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const [preview, setPreview] = useState<DashboardLayout | null>(null);
+  const previewRef = useRef<DashboardLayout | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  // Render the live preview while dragging/resizing, otherwise the real layout.
   const shown = preview ?? layout;
 
-  // Measure a cell's pitch (size + gap) from the rendered grid so pointer pixels
-  // map to grid cells regardless of zoom/width.
-  const measure = useCallback((cols: number) => {
+  const recalc = useCallback(() => {
     const el = gridRef.current;
-    if (!el) return { stepX: 1, stepY: 1 };
-    const rect = el.getBoundingClientRect();
-    const cs = getComputedStyle(el);
-    const colGap = parseFloat(cs.columnGap) || 0;
-    const rowGap = parseFloat(cs.rowGap) || 0;
-    const rowH = parseFloat(cs.gridAutoRows) || 216;
-    const cellW = (rect.width - colGap * (cols - 1)) / cols;
-    return { stepX: cellW + colGap, stepY: rowH + rowGap };
-  }, []);
+    if (!el) return;
+    const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const width = el.clientWidth;
+    const gap = GAP_REM * root;
+    const rowH = ROW_REM * root;
+    const cellW = (width - gap * (shown.cols - 1)) / shown.cols;
+    setMetrics({ cellW, rowH, gap, width });
+  }, [shown.cols]);
+
+  useLayoutEffect(() => {
+    recalc();
+  }, [recalc]);
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(recalc);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [recalc]);
+
+  const isNarrow = metrics.width > 0 && metrics.width < NARROW;
+  const stepX = metrics.cellW + metrics.gap;
+  const stepY = metrics.rowH + metrics.gap;
+
+  const rectOf = (t: Pick<Tile, 'x' | 'y' | 'w' | 'h'>) => ({
+    left: t.x * stepX,
+    top: t.y * stepY,
+    width: Math.max(0, t.w * metrics.cellW + (t.w - 1) * metrics.gap),
+    height: Math.max(0, t.h * metrics.rowH + (t.h - 1) * metrics.gap),
+  });
 
   const beginDrag = useCallback(
-    (kind: DragKind, id: string, e: React.PointerEvent) => {
-      if (!editing) return;
+    (kind: 'move' | 'resize', axis: 'e' | 's' | undefined, id: string, e: React.PointerEvent) => {
+      if (!editing || isNarrow) return;
       const tile = layout.tiles.find((t) => t.id === id);
       if (!tile) return;
       e.preventDefault();
       e.stopPropagation();
-      const { stepX, stepY } = measure(layout.cols);
+      const r = rectOf(tile);
       const s: DragState = {
         kind,
+        axis,
         id,
         base: layout,
         startX: e.clientX,
         startY: e.clientY,
-        originX: tile.x,
-        originY: tile.y,
-        originW: tile.w,
-        originH: tile.h,
-        stepX,
-        stepY,
-        dx: 0,
-        dy: 0,
+        oLeft: r.left,
+        oTop: r.top,
+        oW: tile.w,
+        oH: tile.h,
+        left: r.left,
+        top: r.top,
       };
       dragRef.current = s;
-      previewRef.current = null;
+      previewRef.current = layout;
+      setPreview(layout);
       setDrag(s);
     },
-    [editing, layout, measure],
+    // rectOf depends on metrics; layout/editing/isNarrow captured fresh each render
+    [editing, isNarrow, layout, stepX, stepY, metrics.cellW, metrics.gap, metrics.rowH],
   );
 
-  // Window-level move/up while dragging — robust against pointer-capture quirks
-  // and the conditional-binding race (the element handlers aren't bound until the
-  // re-render after pointerdown). Operates on the layout captured at drag start.
-  const previewRef = useRef<DashboardLayout | null>(null);
   useEffect(() => {
     if (!drag) return;
     const onMove = (e: PointerEvent) => {
@@ -104,18 +136,25 @@ export function DashboardGrid({
       if (!s) return;
       const dx = e.clientX - s.startX;
       const dy = e.clientY - s.startY;
-      s.dx = dx;
-      s.dy = dy;
-      const stepsX = Math.round(dx / s.stepX);
-      const stepsY = Math.round(dy / s.stepY);
       const w = widgetById(s.base.tiles.find((t) => t.id === s.id)?.widget ?? '');
-      const next =
-        s.kind === 'move'
-          ? applyMove(s.base, s.id, s.originX + stepsX, s.originY + stepsY)
-          : applyResize(s.base, s.id, s.originW + stepsX, s.originH + stepsY, w?.minW ?? 1, w?.minH ?? 1);
-      previewRef.current = next;
-      setPreview(next);
-      setDrag({ ...s });
+      if (s.kind === 'move') {
+        s.left = s.oLeft + dx;
+        s.top = s.oTop + dy;
+        const tx = Math.max(0, Math.round(s.left / stepX));
+        const ty = Math.max(0, Math.round(s.top / stepY));
+        const next = applyMove(s.base, s.id, tx, ty);
+        previewRef.current = next;
+        setPreview(next);
+        setDrag({ ...s });
+      } else {
+        const dw = Math.round(dx / stepX);
+        const dh = Math.round(dy / stepY);
+        const reqW = s.axis === 'e' ? s.oW + dw : s.oW;
+        const reqH = s.axis === 's' ? s.oH + dh : s.oH;
+        const next = fitResize(s.base, s.id, reqW, reqH, w?.minW ?? 1, w?.minH ?? 1);
+        previewRef.current = next;
+        setPreview(next);
+      }
     };
     const onUp = () => {
       if (previewRef.current && onChange) onChange(previewRef.current);
@@ -132,52 +171,100 @@ export function DashboardGrid({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [drag, onChange]);
+  }, [drag, onChange, stepX, stepY]);
 
   const stepCols = (d: number) => onChange?.(setCols(layout, layout.cols + d));
   const stepRows = (d: number) => onChange?.(setRows(layout, layout.rows + d));
+  const resizeStep = (id: string, axis: 'e' | 's', d: number) => {
+    const t = layout.tiles.find((x) => x.id === id);
+    const w = widgetById(t?.widget ?? '');
+    if (!t) return;
+    onChange?.(
+      fitResize(layout, id, axis === 'e' ? t.w + d : t.w, axis === 's' ? t.h + d : t.h, w?.minW ?? 1, w?.minH ?? 1),
+    );
+  };
   const addWidget = (id: string) => {
     const w = widgetById(id);
     if (w) onChange?.(addTile(layout, id, w.defaultW, w.defaultH));
     setPickerOpen(false);
   };
 
-  const gridEl = (
+  // ── Narrow stack (mobile) ──────────────────────────────────────────────────
+  if (isNarrow) {
+    return (
+      <div ref={gridRef} className={styles.dashStack} aria-label="Homelab widgets">
+        {shown.tiles.map((t) => {
+          const widget = widgetById(t.widget);
+          if (!widget) return null;
+          const Body = widget.Body;
+          return (
+            <div key={t.id} className={styles.dashTile} style={{ minHeight: `${ROW_REM}rem` }}>
+              <Body />
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const containerH = shown.rows * stepY - metrics.gap;
+
+  const grid = (
     <div
       ref={gridRef}
       className={styles.dashGrid}
       data-editing={editing || undefined}
-      style={{ gridTemplateColumns: `repeat(${shown.cols}, minmax(0, 1fr))` }}
+      style={{ height: metrics.cellW > 0 ? `${containerH}px` : undefined }}
       aria-label="Homelab widgets"
     >
+      {/* Drop placeholder for the tile being moved. */}
+      {drag?.kind === 'move'
+        ? (() => {
+            const t = shown.tiles.find((x) => x.id === drag.id);
+            if (!t) return null;
+            const r = rectOf(t);
+            return (
+              <div
+                className={styles.dropGhost}
+                style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+                aria-hidden
+              />
+            );
+          })()
+        : null}
+
       {shown.tiles.map((t) => {
         const widget = widgetById(t.widget);
         if (!widget) return null;
         const Body = widget.Body;
-        const isDragging = drag?.id === t.id;
-        const follow =
-          isDragging && drag?.kind === 'move'
-            ? { transform: `translate(${drag.dx}px, ${drag.dy}px)` }
-            : undefined;
+        const dragging = drag?.id === t.id;
+        const moving = dragging && drag?.kind === 'move';
+        const r = rectOf(t);
+        // The moving tile floats under the pointer (no transition); everyone else
+        // animates to their reflowed slot.
+        const style = moving
+          ? { left: drag!.left, top: drag!.top, width: r.width, height: r.height }
+          : { left: r.left, top: r.top, width: r.width, height: r.height };
+
+        // Resize affordances availability (free-space aware).
+        const canShrinkW = t.w > widget.minW;
+        const canShrinkH = t.h > widget.minH;
+        const canGrowW = editing && freeSize(layout, t.id, t.w + 1, t.h, widget.minW, widget.minH).w > t.w;
+        const canGrowH = editing && freeSize(layout, t.id, t.w, t.h + 1, widget.minW, widget.minH).h > t.h;
+
         return (
           <div
             key={t.id}
             className={styles.dashTile}
-            data-dragging={isDragging || undefined}
-            style={{
-              gridColumn: `${t.x + 1} / span ${t.w}`,
-              gridRow: `${t.y + 1} / span ${t.h}`,
-              ...follow,
-            }}
-            onPointerDown={editing ? (e) => beginDrag('move', t.id, e) : undefined}
+            data-dragging={dragging || undefined}
+            data-moving={moving || undefined}
+            style={style}
+            onPointerDown={editing ? (e) => beginDrag('move', undefined, t.id, e) : undefined}
           >
             <Body />
             {editing ? (
               <>
                 <div className={styles.tileEditMask} aria-hidden />
-                <span className={styles.tileGrab} aria-hidden>
-                  <GripVertical size={16} strokeWidth={2.2} />
-                </span>
                 <button
                   type="button"
                   className={styles.tileRemove}
@@ -188,22 +275,52 @@ export function DashboardGrid({
                 >
                   <X size={14} strokeWidth={2.4} />
                 </button>
-                {/* Resize handles — right (width), bottom (height), corner (both). */}
-                <span
-                  className={`${styles.tileHandle} ${styles.handleE}`}
-                  onPointerDown={(e) => beginDrag('resize', t.id, e)}
-                  aria-hidden
-                />
-                <span
-                  className={`${styles.tileHandle} ${styles.handleS}`}
-                  onPointerDown={(e) => beginDrag('resize', t.id, e)}
-                  aria-hidden
-                />
-                <span
-                  className={`${styles.tileHandle} ${styles.handleSE}`}
-                  onPointerDown={(e) => beginDrag('resize', t.id, e)}
-                  aria-hidden
-                />
+
+                {/* Right edge — width. Dot with expanded hover zone reveals −/+. */}
+                {canShrinkW || canGrowW ? (
+                <span className={`${styles.handleZone} ${styles.zoneE}`}>
+                  <span
+                    className={styles.handleDot}
+                    onPointerDown={(e) => beginDrag('resize', 'e', t.id, e)}
+                    aria-hidden
+                  />
+                  <span className={styles.handleBtns}>
+                    {canShrinkW ? (
+                      <button type="button" className={styles.handleBtn} onPointerDown={(e) => e.stopPropagation()} onClick={() => resizeStep(t.id, 'e', -1)} aria-label={`Narrow ${widget.name}`}>
+                        <Minus size={14} strokeWidth={2.6} />
+                      </button>
+                    ) : null}
+                    {canGrowW ? (
+                      <button type="button" className={styles.handleBtn} onPointerDown={(e) => e.stopPropagation()} onClick={() => resizeStep(t.id, 'e', 1)} aria-label={`Widen ${widget.name}`}>
+                        <Plus size={14} strokeWidth={2.6} />
+                      </button>
+                    ) : null}
+                  </span>
+                </span>
+                ) : null}
+
+                {/* Bottom edge — height. */}
+                {canShrinkH || canGrowH ? (
+                <span className={`${styles.handleZone} ${styles.zoneS}`}>
+                  <span
+                    className={styles.handleDot}
+                    onPointerDown={(e) => beginDrag('resize', 's', t.id, e)}
+                    aria-hidden
+                  />
+                  <span className={styles.handleBtns}>
+                    {canShrinkH ? (
+                      <button type="button" className={styles.handleBtn} onPointerDown={(e) => e.stopPropagation()} onClick={() => resizeStep(t.id, 's', -1)} aria-label={`Shorten ${widget.name}`}>
+                        <Minus size={14} strokeWidth={2.6} />
+                      </button>
+                    ) : null}
+                    {canGrowH ? (
+                      <button type="button" className={styles.handleBtn} onPointerDown={(e) => e.stopPropagation()} onClick={() => resizeStep(t.id, 's', 1)} aria-label={`Taller ${widget.name}`}>
+                        <Plus size={14} strokeWidth={2.6} />
+                      </button>
+                    ) : null}
+                  </span>
+                </span>
+                ) : null}
               </>
             ) : null}
           </div>
@@ -212,7 +329,7 @@ export function DashboardGrid({
     </div>
   );
 
-  if (!editing) return gridEl;
+  if (!editing) return grid;
 
   return (
     <div className={styles.editWrap}>
@@ -252,7 +369,7 @@ export function DashboardGrid({
             <Minus size={15} strokeWidth={2.4} />
           </button>
         </div>
-        {gridEl}
+        {grid}
       </div>
     </div>
   );

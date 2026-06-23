@@ -84,7 +84,7 @@ export function applyMove(layout: DashboardLayout, id: string, x: number, y: num
 }
 
 /** Resize a tile to (w, h) — clamped to the grid and to the widget's floor — then
- *  reflow. `minW`/`minH` come from the widget def. */
+ *  reflow (PUSH other tiles). Kept for any caller that wants push-on-resize. */
 export function applyResize(
   layout: DashboardLayout,
   id: string,
@@ -99,6 +99,50 @@ export function applyResize(
       : t,
   );
   return settle(layout, tiles, id);
+}
+
+/** The widest/tallest a tile can grow WITHOUT overlapping another tile (free
+ *  space only) — width capped by the grid edge, height free to extend downward
+ *  (the grid grows rows for it). Used both to clamp a resize and to decide
+ *  whether the + handle should show. */
+export function freeSize(
+  layout: DashboardLayout,
+  id: string,
+  reqW: number,
+  reqH: number,
+  minW = 1,
+  minH = 1,
+): { w: number; h: number } {
+  const tile = layout.tiles.find((t) => t.id === id);
+  if (!tile) return { w: minW, h: minH };
+  const others = layout.tiles.filter((t) => t.id !== id);
+  const hits = (w: number, h: number) =>
+    others.some((o) => tile.x < o.x + o.w && tile.x + w > o.x && tile.y < o.y + o.h && tile.y + h > o.y);
+  // Width: clamp to the grid, then shrink until it no longer collides (at the
+  // desired height). Resize NEVER pushes — it stops at occupied cells.
+  let h0 = Math.max(minH, Math.round(reqH));
+  let w = clamp(reqW, minW, layout.cols - tile.x);
+  while (w > minW && hits(w, h0)) w--;
+  // Height: free to grow downward into empty space (rows auto-grow); stop at a
+  // tile directly below.
+  let h = h0;
+  while (h > minH && hits(w, h)) h--;
+  return { w, h };
+}
+
+/** Resize into free space only (no pushing); the grid grows rows to fit height. */
+export function fitResize(
+  layout: DashboardLayout,
+  id: string,
+  reqW: number,
+  reqH: number,
+  minW = 1,
+  minH = 1,
+): DashboardLayout {
+  const { w, h } = freeSize(layout, id, reqW, reqH, minW, minH);
+  const tiles = layout.tiles.map((t) => (t.id === id ? { ...t, w, h } : t));
+  const rows = Math.max(layout.rows, ...tiles.map((t) => t.y + t.h), 1);
+  return { ...layout, rows, tiles };
 }
 
 /** Change the column count: clamp tiles that now stick out (shrink, then shove

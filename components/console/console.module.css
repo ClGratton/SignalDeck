@@ -158,38 +158,66 @@
 .gridArea {
   min-width: 0;
 }
+/* Tiles are absolutely positioned (px rects from cell coords) so they ANIMATE
+   between slots and a dragged tile can float under the cursor. Geometry comes
+   inline from the component (height of the container; left/top/width/height per
+   tile). */
 .dashGrid {
-  --tile-row: 13.5rem; /* uniform cell height — what makes a span an actual size */
-  display: grid;
-  gap: var(--space-sm);
-  grid-auto-rows: var(--tile-row);
-  align-items: stretch;
-  /* grid-template-columns comes inline from the layout (repeat(cols, 1fr)). */
+  position: relative;
+  width: 100%;
 }
 .dashTile {
-  position: relative;
-  min-width: 0;
+  position: absolute;
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* a tile is a fixed cell rectangle; its panel scrolls inside */
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  /* Springy snap (slight settle) for position + size; quick for hover lift. */
+  transition:
+    left 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    top 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    width 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    height 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
 }
-/* The panel fills the tile so spans read as real size; its scroll region flexes
-   to fill the leftover height and scrolls there (no fixed max-height in a tile). */
 .dashTile > .panel {
   flex: 1;
   height: 100%;
   min-height: 0;
 }
-/* Narrow screens: the editable multi-column grid is a desktop affordance, so
-   collapse to a single column and stack tiles in layout order. */
-@media (max-width: 760px) {
-  .dashGrid:not([data-editing]) {
-    grid-template-columns: 1fr !important;
+/* The tile being MOVED tracks the pointer 1:1 — kill the position transition so
+   it doesn't lag the cursor (resize keeps it, so size steps animate). */
+.dashTile[data-moving] {
+  transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dashTile {
+    transition: none;
   }
-  .dashGrid:not([data-editing]) .dashTile {
-    grid-column: 1 / -1 !important;
-    grid-row: auto !important;
-  }
+}
+/* The target-cell outline shown while moving. */
+.dropGhost {
+  position: absolute;
+  z-index: 1;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--accent) 9%, transparent);
+  pointer-events: none;
+  transition:
+    left 0.2s ease,
+    top 0.2s ease,
+    width 0.2s ease,
+    height 0.2s ease;
+}
+/* Narrow screens: a plain vertical stack (editing is a desktop affordance). */
+.dashStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.dashStack .dashTile {
+  position: static;
 }
 
 /* ── Edit mode ──────────────────────────────────────────────────────────────── */
@@ -318,21 +346,29 @@
   color: var(--accent-ink);
 }
 
-/* Tiles in edit mode: outline, grab cursor, and the on-tile controls. */
+/* Tiles in edit mode: dashed outline, grab cursor, and a gentle lift on hover. */
 .dashGrid[data-editing] .dashTile {
   outline: 1px dashed color-mix(in oklch, var(--accent) 45%, var(--border-strong));
-  outline-offset: -1px;
-  border-radius: var(--radius-md);
+  outline-offset: -2px;
   cursor: grab;
   user-select: none;
   touch-action: none;
 }
-.dashTile[data-dragging] {
-  z-index: 20;
-  cursor: grabbing;
+.dashGrid[data-editing] .dashTile:hover {
   outline-color: var(--accent);
   box-shadow: var(--shadow-2);
-  opacity: 0.92;
+  transform: scale(1.012);
+  z-index: 10;
+}
+.dashTile[data-dragging] {
+  z-index: 20;
+  box-shadow: var(--shadow-2);
+}
+.dashTile[data-moving] {
+  z-index: 21;
+  cursor: grabbing;
+  opacity: 0.96;
+  transform: scale(1.03) rotate(0.35deg);
 }
 /* Transparent layer over the panel so a drag doesn't hit the panel's innards. */
 .tileEditMask {
@@ -340,19 +376,11 @@
   inset: 0;
   z-index: 5;
 }
-.tileGrab {
-  position: absolute;
-  top: 0.3rem;
-  left: 0.3rem;
-  z-index: 6;
-  color: var(--muted);
-  pointer-events: none;
-}
 .tileRemove {
   position: absolute;
-  top: 0.3rem;
-  right: 0.3rem;
-  z-index: 7;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 9;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -363,41 +391,102 @@
   border: 1px solid color-mix(in oklch, var(--down) 35%, var(--border));
   border-radius: 999px;
   cursor: pointer;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.16s ease, transform 0.16s ease, background 0.16s ease;
+}
+.dashTile:hover .tileRemove {
+  opacity: 1;
+  transform: scale(1);
 }
 .tileRemove:hover {
-  background: color-mix(in oklch, var(--down) 24%, var(--surface));
+  background: color-mix(in oklch, var(--down) 26%, var(--surface));
+  transform: scale(1.12) rotate(90deg);
 }
-/* Android-style resize handles: small accent pucks on the edges + corner. */
-.tileHandle {
+
+/* Android-17 resize handle: an edge DOT with an expanded invisible hover zone;
+   hovering the zone reveals −/+ (the dot fades out). The component only renders
+   the − when it can shrink and the + when there's room to grow, so the controls
+   reflect what's actually possible. The dot is also draggable to resize. */
+.handleZone {
   position: absolute;
-  z-index: 7;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.zoneE {
+  top: 12%;
+  bottom: 12%;
+  right: 0;
+  width: 2.3rem;
+}
+.zoneS {
+  left: 12%;
+  right: 12%;
+  bottom: 0;
+  height: 2.3rem;
+}
+.handleDot {
+  position: absolute;
   background: var(--accent);
   border: 2px solid var(--surface);
   border-radius: 999px;
   box-shadow: var(--shadow-1);
+  transition: opacity 0.15s ease;
 }
-.handleE {
-  width: 0.85rem;
-  height: 1.6rem;
-  right: -0.1rem;
+.zoneE .handleDot {
+  right: 0.2rem;
   top: 50%;
   transform: translateY(-50%);
+  width: 0.7rem;
+  height: 1.6rem;
   cursor: ew-resize;
 }
-.handleS {
-  width: 1.6rem;
-  height: 0.85rem;
-  bottom: -0.1rem;
+.zoneS .handleDot {
+  bottom: 0.2rem;
   left: 50%;
   transform: translateX(-50%);
+  height: 0.7rem;
+  width: 1.6rem;
   cursor: ns-resize;
 }
-.handleSE {
-  width: 1.1rem;
-  height: 1.1rem;
-  right: -0.1rem;
-  bottom: -0.1rem;
-  cursor: nwse-resize;
+.handleZone:hover .handleDot {
+  opacity: 0;
+}
+.handleBtns {
+  display: flex;
+  gap: 0.3rem;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+}
+.zoneE .handleBtns {
+  flex-direction: column;
+}
+.handleZone:hover .handleBtns {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+.handleBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  color: var(--on-accent);
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+.handleBtn:hover {
+  filter: brightness(1.08);
+  transform: scale(1.08);
 }
 
 .sidebarSlot {
