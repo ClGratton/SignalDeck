@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { hasValidSession } from '@/lib/session';
 import { getProviderKey, providerDef, PROVIDERS } from '@/lib/assistant/keys';
-import { defaultModel, isKnownModel } from '@/lib/assistant/models';
+import { defaultModel, isKnownModel, resolveReasoningEffort } from '@/lib/assistant/models';
 import { startTask, streamFrames, streamHeaders } from '@/lib/assistant/tasks';
 import type {
   ApprovalLevel,
@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
     /^[\w.:-]{1,80}$/.test(rawModel) && isKnownModel(provider, rawModel)
       ? rawModel
       : defaultModel(provider);
+  const reasoningEffort = resolveReasoningEffort(provider, model, body.reasoningEffort);
 
   const mode: AssistantMode = body.mode === 'ask' || body.allowActions === false ? 'ask' : 'agent';
   const approval: ApprovalLevel =
@@ -80,7 +81,16 @@ export async function POST(req: NextRequest) {
   // …]" prefix the client prepends (it's plumbing, not the operator's words).
   const userText = turns[turns.length - 1].content.replace(/^\[context:[^\]]*\]\n/, '');
 
-  const started = startTask({ chatId, provider, model, mode, approval, turns, userText });
+  const started = startTask({
+    chatId,
+    provider,
+    model,
+    reasoningEffort,
+    mode,
+    approval,
+    turns,
+    userText,
+  });
   if (!started.ok) {
     // A task for this chat is already in flight — the client should reattach.
     return NextResponse.json({ error: started.reason, reattach: true }, { status: 409 });

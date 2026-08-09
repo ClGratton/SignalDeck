@@ -42,6 +42,7 @@ import type {
   AssistantMode,
   AssistantProvider,
   ChatTurn,
+  ReasoningEffort,
   StreamFrame,
   TaskStatus,
   TaskStatusDto,
@@ -76,6 +77,7 @@ interface TaskRecord {
   status: TaskStatus;
   provider: AssistantProvider;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   mode: AssistantMode;
   approval: ApprovalLevel;
   /** The original request transcript (seed for the first run + every resume). */
@@ -320,7 +322,15 @@ async function runProvider(task: LiveTask, turns: ChatTurn[], ctx: ToolContext):
       emit(task, { type: 'error', message: `No base URL configured for ${task.provider}.` });
       return;
     }
-    await runOpenAiTurn(task.provider, key, base, task.model, turns, ctx);
+    await runOpenAiTurn(
+      task.provider,
+      key,
+      base,
+      task.model,
+      task.reasoningEffort,
+      turns,
+      ctx,
+    );
   }
 }
 
@@ -426,6 +436,7 @@ export interface StartTaskOpts {
   chatId: string;
   provider: AssistantProvider;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   mode: AssistantMode;
   approval: ApprovalLevel;
   turns: ChatTurn[];
@@ -450,6 +461,7 @@ export function startTask(opts: StartTaskOpts): { ok: true; task: LiveTask } | {
     status: 'running',
     provider: opts.provider,
     model: opts.model,
+    reasoningEffort: opts.reasoningEffort,
     mode: opts.mode,
     approval: opts.approval,
     turns: opts.turns,
@@ -646,6 +658,7 @@ interface PersistedTask {
   status: TaskStatus;
   provider: AssistantProvider;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   mode: AssistantMode;
   approval: ApprovalLevel;
   turns: ChatTurn[];
@@ -674,6 +687,7 @@ function persist(): void {
         status: t.status,
         provider: t.provider,
         model: t.model,
+        reasoningEffort: t.reasoningEffort,
         mode: t.mode,
         approval: t.approval,
         turns: t.turns,
@@ -715,6 +729,7 @@ function loadOnce(): void {
       status: p.status,
       provider: p.provider,
       model: p.model,
+      reasoningEffort: p.reasoningEffort,
       mode: p.mode,
       approval: p.approval,
       turns: Array.isArray(p.turns) ? p.turns : [],

@@ -4,7 +4,7 @@ import { runAnthropicTurn } from '@/lib/assistant/anthropic';
 import { runGeminiTurn } from '@/lib/assistant/gemini';
 import { runOpenAiTurn } from '@/lib/assistant/openai';
 import { getProviderKey, getProviderBaseUrl, providerDef, PROVIDERS } from '@/lib/assistant/keys';
-import { defaultModel, isKnownModel } from '@/lib/assistant/models';
+import { defaultModel, isKnownModel, resolveReasoningEffort } from '@/lib/assistant/models';
 import { awaitDecision } from '@/lib/assistant/decisions';
 import { streamHeaders } from '@/lib/assistant/tasks';
 import type { ToolContext } from '@/lib/assistant/tools';
@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
     /^[\w.:-]{1,80}$/.test(rawModel) && isKnownModel(provider, rawModel)
       ? rawModel
       : defaultModel(provider);
+  const reasoningEffort = resolveReasoningEffort(provider, model, body.reasoningEffort);
 
   const turns: ChatTurn[] = (Array.isArray(body.messages) ? body.messages : [])
     .filter(
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
         } else {
           const base = getProviderBaseUrl(provider);
           if (!base) throw new Error(`no base URL for ${provider}`);
-          await runOpenAiTurn(provider, apiKey, base, model, turns, ctx);
+          await runOpenAiTurn(provider, apiKey, base, model, reasoningEffort, turns, ctx);
         }
         emit({ type: 'done' });
       } catch (err) {

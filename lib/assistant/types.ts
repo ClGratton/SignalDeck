@@ -3,6 +3,10 @@
 
 export type AssistantProvider = 'anthropic' | 'gemini' | 'openai' | 'deepseek' | 'glm';
 
+/** Model-controlled reasoning budget. The server still validates the selected
+ * value against the active model's advertised subset before sending it. */
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 /** Ask = advise + propose (out-of-band cards). Agent = execute tasks inline. */
 export type AssistantMode = 'ask' | 'agent';
 
@@ -98,6 +102,7 @@ export interface AssistantRequestBody {
   approval?: ApprovalLevel;
   provider?: AssistantProvider;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   /** The active chat's id, so the server can load/update this chat's scratch
    *  workspace (notes + plan) and inject it into the prompt. */
   chatId?: string;
@@ -155,6 +160,11 @@ export interface ModelOption {
    *  `inputTokenLimit`, some OpenAI-compatible `context_length`); null ⇒ the
    *  client uses its heuristic. */
   contextWindow?: number | null;
+  /** Model-specific reasoning levels. Omitted for models/providers where this
+   * app has no verified effort contract, so the client never guesses. */
+  reasoningEfforts?: ReasoningEffort[];
+  /** The provider default represented explicitly in the picker. */
+  reasoningDefault?: ReasoningEffort | null;
 }
 
 export interface ModelsResponse {

@@ -45,6 +45,7 @@ import type {
   MemoryNoteDto,
   ModelsResponse,
   ProposalCard,
+  ReasoningEffort,
   StreamFrame,
   TaskStatusDto,
 } from '@/lib/assistant/types';
@@ -84,6 +85,7 @@ const SUGGESTIONS = ['What is running right now?', 'How full is storage?', 'Anyo
 const CHATS_KEY = 'grtlabs:assistant-chats:v1';
 const PICK_KEY = 'grtlabs:assistant-pick:v1';
 const MRU_KEY = 'grtlabs:assistant-mru:v1';
+const REASONING_KEY = 'grtlabs:assistant-reasoning:v1';
 const MRU_MAX = 3; // how many recently-used models lead the menu per provider
 const DRAFT_KEY = 'grtlabs:assistant-draft';
 const MODE_KEY = 'grtlabs:assistant-mode';
@@ -360,6 +362,7 @@ export function AssistantSidebar({
   // Model menu state
   const [catalog, setCatalog] = useState<ModelsResponse | null>(null);
   const [pick, setPick] = useState<{ provider: AssistantProvider; model: string } | null>(null);
+  const [reasoningByModel, setReasoningByModel] = useState<Record<string, ReasoningEffort>>({});
   // Recently-used model ids per provider — these lead the menu, bumping the
   // default featured picks into "More models" once you've used 3 others.
   const [mru, setMru] = useState<Partial<Record<AssistantProvider, string[]>>>({});
@@ -621,6 +624,10 @@ export function AssistantSidebar({
       if (rawPick) setPick(JSON.parse(rawPick) as { provider: AssistantProvider; model: string });
       const rawMru = window.localStorage.getItem(MRU_KEY);
       if (rawMru) setMru(JSON.parse(rawMru) as Partial<Record<AssistantProvider, string[]>>);
+      const rawReasoning = window.localStorage.getItem(REASONING_KEY);
+      if (rawReasoning) {
+        setReasoningByModel(JSON.parse(rawReasoning) as Record<string, ReasoningEffort>);
+      }
       const savedMode = window.localStorage.getItem(MODE_KEY);
       if (savedMode === 'ask' || savedMode === 'agent') setMode(savedMode);
       else if (window.localStorage.getItem(LEGACY_ACTIONS_KEY) === '0') setMode('ask');
@@ -695,11 +702,26 @@ export function AssistantSidebar({
     return null;
   }, [catalog, pick, providerHint]);
 
+  const activeModelOption = useMemo(
+    () =>
+      effective
+        ? (catalog?.models[effective.provider] ?? []).find((m) => m.id === effective.model) ?? null
+        : null,
+    [catalog, effective],
+  );
+  const reasoningOptions = activeModelOption?.reasoningEfforts ?? [];
+  const reasoningKey = effective ? `${effective.provider}:${effective.model}` : '';
+  const savedReasoning = reasoningKey ? reasoningByModel[reasoningKey] : undefined;
+  const reasoningEffort: ReasoningEffort | null = reasoningOptions.includes(
+    savedReasoning as ReasoningEffort,
+  )
+    ? (savedReasoning as ReasoningEffort)
+    : (activeModelOption?.reasoningDefault ?? null);
+
   const modelLabel = useMemo(() => {
     if (!effective) return 'no model';
-    const found = (catalog?.models[effective.provider] ?? []).find((m) => m.id === effective.model);
-    return found?.label ?? (effective.model || effective.provider);
-  }, [catalog, effective]);
+    return activeModelOption?.label ?? (effective.model || effective.provider);
+  }, [activeModelOption, effective]);
 
   // Rough context-usage estimate for the wheel: ~4 chars/token over the
   // transcript + a fixed prompt/tools overhead, against the model's window.
@@ -750,6 +772,19 @@ export function AssistantSidebar({
     } catch {
       /* fine */
     }
+  };
+
+  const setReasoningPersist = (effort: ReasoningEffort) => {
+    if (!reasoningKey || !reasoningOptions.includes(effort)) return;
+    setReasoningByModel((prev) => {
+      const updated = { ...prev, [reasoningKey]: effort };
+      try {
+        window.localStorage.setItem(REASONING_KEY, JSON.stringify(updated));
+      } catch {
+        /* fine */
+      }
+      return updated;
+    });
   };
 
   const setModePersist = (m: AssistantMode) => {
@@ -983,6 +1018,7 @@ export function AssistantSidebar({
           approval,
           provider: effective.provider,
           model: effective.model || undefined,
+          reasoningEffort: reasoningEffort ?? undefined,
         }),
         signal: controller.signal,
       });
@@ -1031,7 +1067,7 @@ export function AssistantSidebar({
       return summary.trim() ? [...cleaned, { kind: 'compaction', summary: summary.trim() }] : cleaned;
     });
     if (summary.trim()) scrollToBottom();
-  }, [busy, effective, items, approval, scrollToBottom]);
+  }, [busy, effective, items, approval, reasoningEffort, scrollToBottom]);
 
   // ── Skills: slash commands handled client-side. A tiny registry so adding a
   // new one is a single entry; `arg` is everything typed after the name. ──
@@ -1391,6 +1427,7 @@ export function AssistantSidebar({
             approval,
             provider: effective.provider,
             model: effective.model || undefined,
+            reasoningEffort: reasoningEffort ?? undefined,
             chatId,
           }),
           signal: controller.signal,
@@ -1444,7 +1481,19 @@ export function AssistantSidebar({
         }
       }
     },
-    [busy, effective, mode, approval, items, SKILLS, streamLoop, reattachResume, finishTurn, markServerOwned],
+    [
+      busy,
+      effective,
+      mode,
+      approval,
+      reasoningEffort,
+      items,
+      SKILLS,
+      streamLoop,
+      reattachResume,
+      finishTurn,
+      markServerOwned,
+    ],
   );
 
   // Discover live server tasks on load / chat-switch and reattach the active one
@@ -2193,6 +2242,34 @@ export function AssistantSidebar({
                 )}
               </div>
 
+              {effective && reasoningOptions.length > 0 ? (
+                <div className={`${styles.menuSection} ${styles.modelList}`}>
+                  <span className={`${styles.menuLabel} mono`}>reasoning effort</span>
+                  <div
+                    className={`${styles.segmented} ${styles.effortGrid}`}
+                    role="radiogroup"
+                    aria-label={`Reasoning effort for ${modelLabel}`}
+                  >
+                    {reasoningOptions.map((effort) => (
+                      <button
+                        key={effort}
+                        type="button"
+                        role="radio"
+                        aria-checked={reasoningEffort === effort}
+                        className={styles.segBtn}
+                        data-on={reasoningEffort === effort || undefined}
+                        onClick={() => setReasoningPersist(effort)}
+                      >
+                        {effort}
+                      </button>
+                    ))}
+                  </div>
+                  <p className={styles.menuHint}>
+                    Medium is the balanced default; max spends the most time and tokens on hard work.
+                  </p>
+                </div>
+              ) : null}
+
               <div className={styles.menuSection}>
                 <button
                   type="button"
@@ -2351,6 +2428,9 @@ export function AssistantSidebar({
             aria-haspopup="menu"
           >
             <span className={styles.modelChipName}>{modelLabel}</span>
+            {reasoningEffort ? (
+              <span className={`${styles.effortTag} mono`}>{reasoningEffort}</span>
+            ) : null}
             <ChevronUp size={13} strokeWidth={2.2} aria-hidden data-flip={menuOpen || undefined} />
           </button>
           <button

@@ -15,7 +15,7 @@ import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeFileAtomic } from '@/lib/atomic-write';
-import type { AssistantProvider, ModelOption } from '@/lib/assistant/types';
+import type { AssistantProvider, ModelOption, ReasoningEffort } from '@/lib/assistant/types';
 import { getProviderKey, getProviderBaseUrl, providerDef, PROVIDERS } from '@/lib/assistant/keys';
 import { cfg } from '@/lib/service-config';
 
@@ -23,6 +23,16 @@ const FILE = path.join(process.cwd(), 'data', 'assistant-models.json');
 const LIST_TTL_MS = 6 * 60 * 60 * 1000; // model lists: refresh every 6h
 const MULT_TTL_MS = 24 * 60 * 60 * 1000; // multipliers: daily — fresh but not chatty
 const FETCH_TIMEOUT_MS = 10_000;
+const OPENAI_OFFICIAL_BASE = 'https://api.openai.com/v1';
+const GPT_5_6_CONTEXT_WINDOW = 1_050_000;
+const GPT_5_6_EFFORTS: readonly ReasoningEffort[] = [
+  'none',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
 
 /** The owner-chosen model that estimates multipliers, as {provider, model}.
  *  Stored "provider:model" in the config; null when unset or its provider has
@@ -68,6 +78,9 @@ const FALLBACK: Record<AssistantProvider, CatalogModel[]> = {
     { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
   ],
   openai: [
+    { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', contextWindow: GPT_5_6_CONTEXT_WINDOW },
+    { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', contextWindow: GPT_5_6_CONTEXT_WINDOW },
+    { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', contextWindow: GPT_5_6_CONTEXT_WINDOW },
     { id: 'gpt-5.1', label: 'gpt-5.1' },
     { id: 'gpt-5', label: 'gpt-5' },
     { id: 'gpt-5-mini', label: 'gpt-5-mini' },
@@ -84,6 +97,61 @@ const FALLBACK: Record<AssistantProvider, CatalogModel[]> = {
     { id: 'glm-4.5-air', label: 'glm-4.5-air' },
   ],
 };
+
+const stripTrailingSlash = (value: string) => value.replace(/\/+$/, '');
+
+function usesOfficialOpenAiApi(provider: AssistantProvider): boolean {
+  return (
+    provider === 'openai' &&
+    stripTrailingSlash(getProviderBaseUrl(provider) ?? '') === OPENAI_OFFICIAL_BASE
+  );
+}
+
+function fallbackFor(provider: AssistantProvider): CatalogModel[] {
+  return provider === 'openai' && !usesOfficialOpenAiApi(provider)
+    ? FALLBACK.openai.slice(3)
+    : FALLBACK[provider];
+}
+
+function isGpt56(model: string): boolean {
+  return /^gpt-5\.6(?:$|-)/i.test(model);
+}
+
+/** The verified effort contract for the current OpenAI GPT-5.6 family. */
+export function reasoningEffortsFor(
+  provider: AssistantProvider,
+  model: string,
+): ReasoningEffort[] {
+  return provider === 'openai' && isGpt56(model) ? [...GPT_5_6_EFFORTS] : [];
+}
+
+/** Validate an untrusted client value and represent GPT-5.6's documented
+ * default explicitly. Unsupported providers/models receive no effort field. */
+export function resolveReasoningEffort(
+  provider: AssistantProvider,
+  model: string,
+  requested: unknown,
+): ReasoningEffort | undefined {
+  const supported = reasoningEffortsFor(provider, model);
+  if (supported.length === 0) return undefined;
+  if (typeof requested === 'string' && supported.includes(requested as ReasoningEffort)) {
+    return requested as ReasoningEffort;
+  }
+  return 'medium';
+}
+
+/** The official model endpoint can be temporarily unavailable or an on-disk
+ * catalog can predate a release. Keep the documented GPT-5.6 family available
+ * on the official base without injecting those ids into custom-compatible APIs. */
+function withDocumentedOpenAiModels(
+  provider: AssistantProvider,
+  models: CatalogModel[],
+): CatalogModel[] {
+  if (!usesOfficialOpenAiApi(provider)) return models;
+  const merged = new Map<string, CatalogModel>();
+  for (const model of [...FALLBACK.openai.slice(0, 3), ...models]) merged.set(model.id, model);
+  return [...merged.values()];
+}
 
 let catalog: CatalogFile | null = null;
 let catalogMtime = -1; // re-read on mtime change (multi-instance — see chat-store.ts)
@@ -242,7 +310,7 @@ export async function listProviderModels(
   const cat = readCatalog();
   const entry = cat[provider];
   if (entry && Date.now() - entry.fetchedAt < LIST_TTL_MS && entry.models.length > 0) {
-    return entry.models;
+    return withDocumentedOpenAiModels(provider, entry.models);
   }
   const key = getProviderKey(provider);
   const kind = providerDef(provider)?.kind;
@@ -255,18 +323,21 @@ export async function listProviderModels(
           : await fetchOpenAiModels(provider, key);
     if (live) {
       writeCatalog({ ...readCatalog(), [provider]: { fetchedAt: Date.now(), models: live } });
-      return live;
+      return withDocumentedOpenAiModels(provider, live);
     }
   }
-  return entry?.models?.length ? entry.models : FALLBACK[provider];
+  return withDocumentedOpenAiModels(
+    provider,
+    entry?.models?.length ? entry.models : fallbackFor(provider),
+  );
 }
 
 /** Synchronous membership check for request validation — uses whatever list is
  *  already cached (never blocks the chat request on a catalog fetch). */
 export function isKnownModel(provider: AssistantProvider, model: string): boolean {
   const entry = readCatalog()[provider];
-  const list = entry?.models?.length ? entry.models : FALLBACK[provider];
-  return list.some((m) => m.id === model);
+  const list = entry?.models?.length ? entry.models : fallbackFor(provider);
+  return withDocumentedOpenAiModels(provider, list).some((m) => m.id === model);
 }
 
 /** Default model per provider; env overrides still win. */
@@ -277,7 +348,7 @@ export function defaultModel(provider: AssistantProvider): string {
     case 'gemini':
       return process.env.GEMINI_MODEL || 'gemini-2.5-flash';
     case 'openai':
-      return process.env.OPENAI_MODEL || FALLBACK.openai[0].id;
+      return process.env.OPENAI_MODEL || fallbackFor(provider)[0].id;
     case 'deepseek':
       return process.env.DEEPSEEK_MODEL || FALLBACK.deepseek[0].id;
     case 'glm':
@@ -472,7 +543,7 @@ async function estimateMultipliers(
 const TIERS = [
   'opus', 'sonnet', 'haiku', 'fable', // Anthropic
   'flash-lite', 'flash', 'pro', // Gemini
-  'mini', 'nano', 'gpt', // OpenAI
+  'sol', 'terra', 'luna', 'mini', 'nano', 'gpt', // OpenAI
   'reasoner', 'chat', // DeepSeek
   'air', 'glm', // GLM
 ] as const;
@@ -511,11 +582,18 @@ export async function modelOptions(provider: AssistantProvider): Promise<ModelOp
   const models = await listProviderModels(provider);
   const mult = getMultipliers();
   const featured = featuredIds(models);
-  return models.map((m) => ({
-    id: m.id,
-    label: m.label,
-    multiplier: mult[m.id] ?? null,
-    featured: featured.has(m.id),
-    contextWindow: m.contextWindow ?? null,
-  }));
+  return models.map((m) => {
+    const reasoningEfforts = reasoningEffortsFor(provider, m.id);
+    return {
+      id: m.id,
+      label: m.label,
+      multiplier: mult[m.id] ?? null,
+      featured: featured.has(m.id),
+      contextWindow:
+        m.contextWindow ?? (provider === 'openai' && isGpt56(m.id) ? GPT_5_6_CONTEXT_WINDOW : null),
+      ...(reasoningEfforts.length > 0
+        ? { reasoningEfforts, reasoningDefault: 'medium' as const }
+        : {}),
+    };
+  });
 }
