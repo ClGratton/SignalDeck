@@ -285,7 +285,36 @@
   cursor: default;
   overscroll-behavior: contain;
 }
-.browserViewport:focus-visible {
+.browserKeyboardSink {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 2;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  resize: none;
+}
+.browserTypingPreview {
+  position: absolute;
+  z-index: 3;
+  right: var(--space-xs);
+  bottom: var(--space-xs);
+  max-width: min(24rem, calc(100% - 2 * var(--space-xs)));
+  padding: 0.28rem 0.5rem;
+  overflow: hidden;
+  color: var(--ink-strong);
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-1);
+  font: 600 var(--text-xs)/1.2 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.browserViewport:focus-within {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
 }

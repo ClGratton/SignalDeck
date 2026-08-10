@@ -47,8 +47,11 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
   const [error, setError] = useState<string | null>(null);
   const [pulse, setPulse] = useState<{ x: number; y: number; id: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const keyboardRef = useRef<HTMLTextAreaElement | null>(null);
   const viewportSize = useRef<BrowserViewportDto>({ width: 1280, height: 720 });
   const typed = useRef('');
+  const typingGeneration = useRef(0);
+  const composing = useRef(false);
   const typeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wheel = useRef({ x: 0, y: 0, clientX: 0, clientY: 0 });
@@ -59,6 +62,7 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
   const frameRef = useRef(frame);
   const postRef = useRef<((body: Record<string, unknown>, refresh?: boolean) => Promise<void>) | null>(null);
   const [paneFrame, setPaneFrame] = useState<CSSProperties | undefined>();
+  const [typingActive, setTypingActive] = useState(false);
 
   useLayoutEffect(() => {
     const anchor = anchorRef.current;
@@ -185,38 +189,60 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
     if (resizeTimer.current) clearTimeout(resizeTimer.current);
   }, []);
 
-  const flushTyped = useCallback(() => {
+  const sendBuffered = useCallback((extraActions: Record<string, unknown>[] = []) => {
     const text = typed.current;
     typed.current = '';
     if (typeTimer.current) clearTimeout(typeTimer.current);
     typeTimer.current = null;
-    if (text) void post({ actions: [{ type: 'type', text }] });
+    const actions = text ? [{ type: 'type', text }, ...extraActions] : extraActions;
+    if (actions.length === 0) return;
+    const generation = typingGeneration.current;
+    void post({ actions }).finally(() => {
+      if (typingGeneration.current === generation) setTypingActive(false);
+    });
   }, [post]);
 
-  const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const flushTyped = useCallback(() => sendBuffered(), [sendBuffered]);
+
+  const bufferTyped = useCallback((text: string) => {
+    if (!text) return;
+    typed.current += text;
+    typingGeneration.current += 1;
+    setTypingActive(true);
+    if (typeTimer.current) clearTimeout(typeTimer.current);
+    // One request for a typing burst, not a screenshot round-trip per key.
+    typeTimer.current = setTimeout(flushTyped, 180);
+  }, [flushTyped]);
+
+  const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
       event.preventDefault();
+      sendBuffered();
       document.querySelector<HTMLInputElement>(`.${styles.browserAddress}`)?.focus();
       return;
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 't') {
       event.preventDefault();
+      sendBuffered();
       void post({ command: 'new_tab' }, false);
       return;
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w' && frame?.tabId) {
       event.preventDefault();
+      sendBuffered();
       void post({ command: 'close_tab', tabId: frame.tabId }, false);
       return;
     }
-    if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      event.preventDefault();
-      typed.current += event.key;
-      if (typeTimer.current) clearTimeout(typeTimer.current);
-      typeTimer.current = setTimeout(flushTyped, 90);
+    // Let the textarea's input event carry printable text, paste, mobile virtual
+    // keyboards, and IME composition. keydown alone misses all of those.
+    if (
+      composing.current ||
+      (event.key.length === 1 && (!event.ctrlKey && !event.metaKey && !event.altKey)) ||
+      event.getModifierState('AltGraph') ||
+      ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v')
+    ) {
       return;
     }
-    flushTyped();
     const names: string[] = [];
     if (event.ctrlKey) names.push('CTRL');
     if (event.metaKey) names.push('META');
@@ -225,7 +251,7 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
     names.push(event.key === ' ' ? 'SPACE' : event.key.toUpperCase());
     if (!['SHIFT', 'CONTROL', 'ALT', 'META'].includes(event.key.toUpperCase())) {
       event.preventDefault();
-      void post({ actions: [{ type: 'keypress', keys: names }] });
+      sendBuffered([{ type: 'keypress', keys: names }]);
     }
   };
 
@@ -324,11 +350,12 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
       <div
         ref={viewportRef}
         className={styles.browserViewport}
-        tabIndex={0}
-        onKeyDown={keyDown}
         onPointerDown={(event) => {
           if (!frame || event.button !== 0) return;
-          event.currentTarget.focus();
+          event.preventDefault();
+          // A real focusable text control is the keyboard bridge. This makes
+          // desktop typing, paste, IME, and mobile keyboards reach Playwright.
+          keyboardRef.current?.focus({ preventScroll: true });
           const p = point(event);
           setPulse({ x: p.localX, y: p.localY, id: Date.now() });
           void post({ actions: [{ type: 'click', x: p.x, y: p.y, button: 'left' }] });
@@ -370,6 +397,29 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
         }}
         aria-label="Interactive browser page. Click, scroll, and type directly."
       >
+        <textarea
+          ref={keyboardRef}
+          className={styles.browserKeyboardSink}
+          tabIndex={0}
+          aria-label="Browser keyboard input"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          onKeyDown={keyDown}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={(event) => {
+            composing.current = false;
+            const text = event.currentTarget.value;
+            event.currentTarget.value = '';
+            bufferTyped(text);
+          }}
+          onInput={(event) => {
+            if (composing.current) return;
+            const text = event.currentTarget.value;
+            event.currentTarget.value = '';
+            bufferTyped(text);
+          }}
+        />
         {frame ? (
           <img
             className={styles.browserScreen}
@@ -388,6 +438,11 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
             style={{ left: pulse.x, top: pulse.y }}
             aria-hidden
           />
+        ) : null}
+        {typingActive ? (
+          <span className={styles.browserTypingPreview} aria-live="polite">
+            Typing…
+          </span>
         ) : null}
       </div>
       <p className={styles.browserHint}>
