@@ -34,6 +34,17 @@ export interface ChatTurn {
   attachments?: ChatAttachment[];
 }
 
+export interface BrowserTabDto {
+  id: string;
+  title: string;
+  url: string;
+}
+
+export interface BrowserViewportDto {
+  width: number;
+  height: number;
+}
+
 /** A proposed action awaiting the operator's explicit confirmation. The server
  *  holds the executable side; the client only ever sees this card. */
 export interface ProposalCard {
@@ -56,7 +67,16 @@ export type AssistantEvent =
   | { type: 'tool'; name: string; label: string }
   /** Ephemeral screenshot of the shared server-side visual browser. Cookie and
    * storage values never cross this boundary. */
-  | { type: 'browser'; imageUrl: string; url: string; title: string }
+  | {
+      type: 'browser';
+      imageUrl: string;
+      url: string;
+      title: string;
+      tabId: string;
+      tabs: BrowserTabDto[];
+      viewport: BrowserViewportDto;
+      latencyMs?: number;
+    }
   /** Ask mode: an out-of-band proposal card (confirmed later via /execute). */
   | { type: 'proposal'; proposal: ProposalCard }
   /** Agent mode: an action awaiting an inline Run/Skip decision (/decide). */

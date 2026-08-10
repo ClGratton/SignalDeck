@@ -86,13 +86,20 @@ function promptCacheKey(model: string, chatId?: string): string {
     .update(chatId ?? 'shared')
     .digest('hex')
     .slice(0, 16);
-  return `grtlabs:${model}:${scope}:v1`;
+  return `grtlabs:${model}:${scope}:v2`;
 }
 
-function responseInput(turns: ChatTurn[], explicitCache: boolean): ResponseInputItem[] {
+function responseInput(
+  turns: ChatTurn[],
+  explicitCache: boolean,
+  cachePrefixTurns = turns.length,
+): ResponseInputItem[] {
   let breakpoint = -1;
   if (explicitCache) {
-    for (let i = turns.length - 1; i >= 0; i--) {
+    // Timer resumes append volatile tool/wait checkpoints. Keep the breakpoint
+    // inside the original transcript so each wake reads the same cached prefix
+    // instead of writing and rebilling an ever-growing one.
+    for (let i = Math.min(turns.length, cachePrefixTurns) - 1; i >= 0; i--) {
       if (turns[i].role === 'user' && turns[i].content.length > 0) {
         breakpoint = i;
         break;
@@ -255,7 +262,7 @@ async function runResponsesTurn(
   ];
   const explicitCache = supportsExplicitPromptCache(model) &&
     turns.some((turn) => turn.role === 'user' && turn.content.length > 0);
-  const input = responseInput(turns, explicitCache);
+  const input = responseInput(turns, explicitCache, ctx.cachePrefixTurns);
   const cacheKey = explicitCache ? promptCacheKey(model, ctx.chatId) : undefined;
   // Freeze the prompt for this run. Plan/memory tools can update server state
   // between model calls, but their result already tells the model what changed;

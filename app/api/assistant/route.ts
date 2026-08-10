@@ -21,6 +21,21 @@ export const runtime = 'nodejs';
 
 const MAX_TURNS = 24;
 const MAX_TURN_CHARS = 6000;
+const MAX_HISTORY_CHARS = 18_000;
+
+function capHistoryChars(input: ChatTurn[]): ChatTurn[] {
+  const kept: ChatTurn[] = [];
+  let remaining = MAX_HISTORY_CHARS;
+  for (let i = input.length - 1; i >= 0 && remaining > 0; i--) {
+    const turn = input[i];
+    const content = turn.content.length > remaining
+      ? turn.content.slice(turn.content.length - remaining)
+      : turn.content;
+    kept.push({ ...turn, content });
+    remaining -= content.length;
+  }
+  return kept.reverse();
+}
 
 /** PRIVILEGED: the operator assistant. Starts a SERVER-SIDE agent task for the
  *  chat (decoupled from this request) and streams its NDJSON frames. The task
@@ -74,7 +89,7 @@ export async function POST(req: NextRequest) {
 
   let turns: ChatTurn[];
   try {
-    turns = (Array.isArray(body.messages) ? body.messages : [])
+    turns = capHistoryChars((Array.isArray(body.messages) ? body.messages : [])
     .filter(
       (t): t is ChatTurn =>
         !!t && (t.role === 'user' || t.role === 'assistant') && typeof t.content === 'string',
@@ -86,7 +101,7 @@ export async function POST(req: NextRequest) {
         ...(t.role === 'user'
           ? { attachments: resolveAttachmentRefs(t.attachments, attachmentKindsFor(provider, model)) }
           : {}),
-      }));
+      })));
     enforceAttachmentRequestLimits(turns);
   } catch (error) {
     return NextResponse.json(

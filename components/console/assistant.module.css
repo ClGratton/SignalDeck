@@ -22,12 +22,14 @@
 .browserPane {
   position: fixed;
   z-index: calc(var(--z-header) + 1);
-  /* The operator panel lives below the console header. Match that same frame
-     instead of starting at the page edge, so both top and bottom align. */
+  /* BrowserPane measures the operator panel and overrides these fallbacks with
+     its exact top and bottom coordinates. */
   top: calc(var(--pad-y) + 3.4rem);
+  bottom: var(--pad-y);
+  left: var(--pad-x);
   right: calc(var(--pad-x) + 360px + var(--space-sm));
-  width: min(760px, calc(100vw - 360px - 2 * var(--pad-x) - 2 * var(--space-sm)));
-  height: calc(100svh - 2 * var(--pad-y) - 3.4rem);
+  width: auto;
+  height: auto;
   min-width: 32rem;
   display: flex;
   flex-direction: column;
@@ -38,34 +40,180 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-2);
 }
-.browserHead,
+
+/* Notebook-index tabs for the surfaces the fixed AI chat can work beside.
+   Their containing block is ConsoleShell's sidebar slot, so they sit directly
+   on the chat panel's right edge without making the agent itself a tab. */
+.assistantIndex {
+  position: absolute;
+  z-index: calc(var(--z-header) + 3);
+  top: 4.2rem;
+  left: calc(100% - 1px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.38rem;
+}
+
+.assistantIndex button {
+  width: 2rem;
+  min-height: 6.7rem;
+  padding: 0.7rem 0.42rem;
+  border: 1px solid color-mix(in oklch, var(--border-strong), transparent 20%);
+  border-inline-start: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--ink);
+  font: 700 0.67rem/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  box-shadow: var(--shadow-1);
+  opacity: 0.78;
+  transform: translateX(-0.12rem);
+  transition: transform var(--dur-fast) var(--ease-out-quint), opacity var(--dur-fast) ease;
+}
+.assistantIndex button[data-surface='dashboard'] {
+  background: color-mix(in oklch, var(--primary) 28%, var(--surface));
+}
+.assistantIndex button[data-surface='browser'] {
+  background: color-mix(in oklch, var(--accent) 30%, var(--surface));
+}
+.assistantIndex button:hover,
+.assistantIndex button:focus-visible,
+.assistantIndex button[data-active] {
+  opacity: 1;
+  transform: translateX(0);
+}
+.assistantIndex button[data-active] {
+  width: 2.35rem;
+  box-shadow: var(--shadow-2);
+}
+
+@media (max-width: 1100px) {
+  .assistantIndex { display: none; }
+}
+.browserTabs,
 .browserBar {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
   flex: 0 0 auto;
-  padding: 0.55rem 0.65rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
 }
-.browserHead {
-  justify-content: space-between;
+.browserTabs {
+  min-height: 2.35rem;
+  padding: 0.28rem 0.35rem 0;
 }
-.browserTitle {
+.browserTabList {
   min-width: 0;
-  display: inline-flex;
+  flex: 1;
+  display: flex;
   align-items: center;
-  gap: 0.4rem;
-  overflow: hidden;
+  gap: 0.18rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.browserTabList::-webkit-scrollbar {
+  display: none;
+}
+.browserTab {
+  min-width: 7rem;
+  max-width: 12rem;
+  height: 1.92rem;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+}
+.browserTab[data-active] {
   color: var(--ink-strong);
-  font-size: var(--text-sm);
-  font-weight: 650;
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+.browserTabSelect {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.3rem 0 0.48rem;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+.browserTabSelect span {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.browserTitle svg {
+.browserTabSelect svg {
   flex: 0 0 auto;
   color: var(--accent-ink);
+}
+.browserTabClose,
+.browserNewTab,
+.browserPaneClose {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.browserTabClose {
+  width: 1.45rem;
+  height: 1.45rem;
+  margin-right: 0.18rem;
+}
+.browserNewTab,
+.browserPaneClose {
+  width: 1.9rem;
+  height: 1.9rem;
+  flex: 0 0 auto;
+}
+.browserPaneClose {
+  margin-left: 0.25rem;
+  align-self: flex-start;
+}
+.browserTabClose:hover,
+.browserNewTab:hover,
+.browserPaneClose:hover {
+  color: var(--ink-strong);
+  background: var(--surface-3);
+}
+.browserBar {
+  gap: 0.38rem;
+  padding: 0.42rem 0.55rem;
+}
+.browserNav {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+.browserNav button {
+  width: 1.8rem;
+  height: 1.8rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.browserNav button:hover {
+  color: var(--ink-strong);
+  background: var(--surface-3);
 }
 .browserAddress {
   min-width: 0;
@@ -83,7 +231,6 @@
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
-.browserBarBtn,
 .browserGo {
   height: 2rem;
   display: grid;
@@ -93,39 +240,47 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
 }
-.browserBarBtn {
+.browserGo {
   width: 2rem;
   padding: 0;
-  color: var(--muted);
-  background: var(--surface);
-}
-.browserGo {
-  padding: 0 0.7rem;
   color: var(--on-accent);
   background: var(--accent);
-  font-size: var(--text-xs);
-  font-weight: 650;
 }
-.browserBarBtn:hover:not(:disabled) {
-  color: var(--ink-strong);
-}
-.browserBarBtn:focus-visible,
+.browserTabSelect:focus-visible,
+.browserTabClose:focus-visible,
+.browserNewTab:focus-visible,
+.browserPaneClose:focus-visible,
+.browserNav button:focus-visible,
 .browserGo:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
-.browserBarBtn:disabled,
 .browserGo:disabled {
   opacity: 0.45;
   cursor: default;
+}
+.browserActivity {
+  min-width: 3.8rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.28rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.browserActivity svg {
+  animation: browserSpin 0.8s linear infinite;
 }
 .browserViewport {
   position: relative;
   min-height: 0;
   flex: 1;
   display: grid;
-  place-items: start center;
-  overflow: auto;
+  place-items: stretch;
+  overflow: hidden;
   background: oklch(0.13 0.01 245);
   cursor: default;
   overscroll-behavior: contain;
@@ -137,28 +292,30 @@
 .browserScreen {
   display: block;
   width: 100%;
-  height: auto;
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
+  height: 100%;
+  object-fit: fill;
   user-select: none;
 }
 .browserLoading {
-  align-self: center;
-  justify-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   color: var(--muted);
   font-size: var(--text-sm);
 }
-.browserBusy {
+.browserLoading svg {
+  animation: browserSpin 0.8s linear infinite;
+}
+.browserClickPulse {
   position: absolute;
-  top: 0.55rem;
-  right: 0.55rem;
-  padding: 0.25rem 0.45rem;
-  color: var(--ink-strong);
-  background: color-mix(in oklch, var(--surface) 90%, transparent);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  box-shadow: var(--shadow-1);
-  font-size: var(--text-xs);
+  width: 1rem;
+  height: 1rem;
+  pointer-events: none;
+  border: 1px solid var(--focus);
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.35);
+  animation: browserPulse 260ms var(--ease-out-quint) forwards;
 }
 .browserError,
 .browserHint {
@@ -176,6 +333,27 @@
   color: var(--muted);
   border-top: 1px solid var(--border);
   background: var(--surface-2);
+}
+.browserHint kbd {
+  padding: 0.05rem 0.22rem;
+  color: var(--ink);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+@keyframes browserSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes browserPulse {
+  to { opacity: 0; transform: translate(-50%, -50%) scale(1.6); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .browserActivity svg,
+  .browserLoading svg,
+  .browserClickPulse { animation: none; }
 }
 
 @media (max-width: 1100px) {

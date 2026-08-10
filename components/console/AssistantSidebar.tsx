@@ -11,7 +11,7 @@
 // Ask/Agent mode lives under the model picker, and the assistant's durable
 // memory notes are listed and editable in the Memory view.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bot,
@@ -31,7 +31,6 @@ import {
   Paperclip,
   Plus,
   RotateCcw,
-  RefreshCw,
   Send,
   Square,
   SquarePen,
@@ -57,6 +56,7 @@ import type {
 } from '@/lib/assistant/types';
 import { useReveal } from './RevealProvider';
 import { Markdown } from './Markdown';
+import { BrowserPane } from './BrowserPane';
 import styles from './assistant.module.css';
 
 type ProposalState = 'pending' | 'running' | 'ok' | 'fail' | 'gone';
@@ -379,12 +379,16 @@ export function AssistantSidebar({
   provider: providerHint,
   open,
   onClose,
+  browserVisible,
+  onBrowserVisibleChange,
 }: {
   /** Server-rendered hint (env/stored key present); refined via /api/assistant/models. */
   provider: AssistantProvider | null;
   /** Mobile drawer visibility; ignored on desktop (CSS keeps it in the grid). */
   open: boolean;
   onClose: () => void;
+  browserVisible: boolean;
+  onBrowserVisibleChange: (visible: boolean) => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
   // Mirror of `items` for synchronous reads in callbacks/timers (so a reconcile
@@ -448,7 +452,6 @@ export function AssistantSidebar({
   const [workspace, setWorkspace] = useState<ChatWorkspaceDto | null>(null);
   const [planOpen, setPlanOpen] = useState(true);
   const [browserFrame, setBrowserFrame] = useState<BrowserFrame | null>(null);
-  const [browserVisible, setBrowserVisible] = useState(false);
 
   // Timer turn-state: while a SERVER-side timer runs the composer is locked (the
   // turn is "busy waiting"). The timer card carries its own controls — "Run now"
@@ -460,6 +463,7 @@ export function AssistantSidebar({
   const contextNotes = useRef<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   // Controller for the ACTIVE chat's stream subscription. Switching chats
   // aborts only this subscription; the server-side task keeps running.
   const abortRef = useRef<AbortController | null>(null);
@@ -1296,7 +1300,7 @@ export function AssistantSidebar({
   const applyEvent = useCallback((e: AssistantEvent) => {
     if (e.type === 'browser') {
       setBrowserFrame(e);
-      setBrowserVisible(true);
+      onBrowserVisibleChange(true);
       return;
     }
     if (e.type === 'workspace') {
@@ -1364,11 +1368,11 @@ export function AssistantSidebar({
       }
       return next;
     });
-  }, []);
+  }, [onBrowserVisibleChange]);
 
   const openBrowser = useCallback(() => {
-    setBrowserVisible(true);
-  }, []);
+    onBrowserVisibleChange(true);
+  }, [onBrowserVisibleChange]);
 
   type PumpResult =
     | { reason: 'done' }
@@ -2079,10 +2083,11 @@ export function AssistantSidebar({
       <BrowserPane
         frame={browserFrame}
         onFrame={setBrowserFrame}
-        onClose={() => setBrowserVisible(false)}
+        onClose={() => onBrowserVisibleChange(false)}
+        anchorRef={sidebarRef}
       />
     ) : null}
-    <aside className={styles.sidebar} data-open={open || undefined} aria-label="Operator assistant">
+    <aside ref={sidebarRef} className={styles.sidebar} data-open={open || undefined} aria-label="Operator assistant">
       <header className={styles.head}>
         <span className={styles.headTitle}>
           <Bot size={16} strokeWidth={2.2} aria-hidden />
@@ -2096,7 +2101,7 @@ export function AssistantSidebar({
             type="button"
             className={styles.iconBtn}
             data-active={browserVisible || undefined}
-            onClick={() => (browserVisible ? setBrowserVisible(false) : openBrowser())}
+            onClick={() => (browserVisible ? onBrowserVisibleChange(false) : openBrowser())}
             aria-label={browserVisible ? 'Hide visual browser' : 'Open visual browser'}
             title={browserVisible ? 'Hide browser' : 'Open browser'}
           >
@@ -2906,175 +2911,29 @@ export function AssistantSidebar({
           )}
         </form>
       </div>
-      ) : null}
+    ) : null}
     </aside>
+    <nav className={styles.assistantIndex} aria-label="AI work surfaces">
+      <button
+        type="button"
+        data-surface="dashboard"
+        data-active={!browserVisible || undefined}
+        aria-pressed={!browserVisible}
+        onClick={() => onBrowserVisibleChange(false)}
+      >
+        Dashboard
+      </button>
+      <button
+        type="button"
+        data-surface="browser"
+        data-active={browserVisible || undefined}
+        aria-pressed={browserVisible}
+        onClick={openBrowser}
+      >
+        Browser
+      </button>
+    </nav>
     </>
-  );
-}
-
-function BrowserPane({
-  frame,
-  onFrame,
-  onClose,
-}: {
-  frame: BrowserFrame | null;
-  onFrame: (frame: BrowserFrame) => void;
-  onClose: () => void;
-}) {
-  const [address, setAddress] = useState(frame?.url ?? '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const typed = useRef('');
-  const typeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (frame?.url) setAddress(frame.url);
-  }, [frame?.url]);
-  useEffect(() => () => {
-    if (typeTimer.current) clearTimeout(typeTimer.current);
-  }, []);
-
-  const post = useCallback(async (body: object) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/assistant/browser', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = (await res.json()) as (Omit<BrowserFrame, 'type'> & { error?: string });
-      if (!res.ok) throw new Error(data.error || `Browser request failed (${res.status}).`);
-      onFrame({ type: 'browser', imageUrl: data.imageUrl, url: data.url, title: data.title });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Browser action failed.');
-    } finally {
-      setBusy(false);
-    }
-  }, [onFrame]);
-
-  useEffect(() => {
-    if (frame) return;
-    let active = true;
-    fetch('/api/assistant/browser', { cache: 'no-store' })
-      .then(async (res) => {
-        const data = (await res.json()) as (Omit<BrowserFrame, 'type'> & { error?: string });
-        if (!res.ok) throw new Error(data.error || `Browser request failed (${res.status}).`);
-        if (active) onFrame({ type: 'browser', imageUrl: data.imageUrl, url: data.url, title: data.title });
-      })
-      .catch((err) => {
-        if (active) setError(err instanceof Error ? err.message : 'Browser unavailable.');
-      });
-    return () => {
-      active = false;
-    };
-  }, [frame, onFrame]);
-
-  const flushTyped = useCallback(() => {
-    const text = typed.current;
-    typed.current = '';
-    if (typeTimer.current) clearTimeout(typeTimer.current);
-    typeTimer.current = null;
-    if (text) void post({ actions: [{ type: 'type', text }] });
-  }, [post]);
-
-  const keyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      typed.current += e.key;
-      if (typeTimer.current) clearTimeout(typeTimer.current);
-      typeTimer.current = setTimeout(flushTyped, 120);
-      return;
-    }
-    flushTyped();
-    const names: string[] = [];
-    if (e.ctrlKey) names.push('CTRL');
-    if (e.metaKey) names.push('META');
-    if (e.altKey) names.push('ALT');
-    if (e.shiftKey) names.push('SHIFT');
-    const keyMap: Record<string, string> = { ' ': 'SPACE' };
-    names.push(keyMap[e.key] ?? e.key.toUpperCase());
-    if (!['SHIFT', 'CONTROL', 'ALT', 'META'].includes(e.key.toUpperCase())) {
-      e.preventDefault();
-      void post({ actions: [{ type: 'keypress', keys: names }] });
-    }
-  };
-
-  return (
-    <section className={styles.browserPane} aria-label="Visual browser">
-      <header className={styles.browserHead}>
-        <span className={styles.browserTitle} title={frame?.title || undefined}>
-          <Globe2 size={14} aria-hidden /> {frame?.title || 'Visual browser'}
-        </span>
-        <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close browser pane">
-          <X size={15} aria-hidden />
-        </button>
-      </header>
-      <form
-        className={styles.browserBar}
-        onSubmit={(e) => {
-          e.preventDefault();
-          void post({ navigate: address });
-        }}
-      >
-        <input
-          className={styles.browserAddress}
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          aria-label="Browser address"
-          spellCheck={false}
-        />
-        <button
-          type="button"
-          className={styles.browserBarBtn}
-          onClick={() => void post({ navigate: frame?.url || address })}
-          disabled={busy || (!frame?.url && !address)}
-          aria-label="Reload page"
-          title="Reload"
-        >
-          <RefreshCw size={14} aria-hidden />
-        </button>
-        <button type="submit" className={styles.browserGo} disabled={busy || !address.trim()}>
-          Go
-        </button>
-      </form>
-      {error ? <p className={styles.browserError} role="alert">{error}</p> : null}
-      <div
-        className={styles.browserViewport}
-        tabIndex={0}
-        onKeyDown={keyDown}
-        onClick={(e) => {
-          if (!frame) return;
-          const image = e.currentTarget.querySelector('img');
-          if (!image) return;
-          const rect = image.getBoundingClientRect();
-          const x = ((e.clientX - rect.left) / rect.width) * 1280;
-          const y = ((e.clientY - rect.top) / rect.height) * 720;
-          void post({ actions: [{ type: 'click', x, y, button: 'left' }] });
-        }}
-        onWheel={(e) => {
-          if (!frame) return;
-          e.preventDefault();
-          const rect = e.currentTarget.getBoundingClientRect();
-          void post({
-            actions: [{
-              type: 'scroll',
-              x: ((e.clientX - rect.left) / rect.width) * 1280,
-              y: ((e.clientY - rect.top) / rect.height) * 720,
-              scroll_x: e.deltaX,
-              scroll_y: e.deltaY,
-            }],
-          });
-        }}
-        aria-label="Interactive browser screen. Click and type to control it."
-      >
-        {frame ? <img className={styles.browserScreen} src={frame.imageUrl} alt="Current browser page" draggable={false} /> : (
-          <div className={styles.browserLoading}>Starting browser…</div>
-        )}
-        {busy ? <span className={styles.browserBusy}>Working…</span> : null}
-      </div>
-      <p className={styles.browserHint}>Click a field, then type. Sessions stay in this server-side browser.</p>
-    </section>
   );
 }
 

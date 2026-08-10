@@ -53,12 +53,16 @@ export function ConsoleShell({
   // Desktop: sidebar docked in the grid, collapse remembered. Mobile: overlay.
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [browserVisible, setBrowserVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(SIDEBAR_KEY);
-    if (saved != null) setSidebarOpen(saved === '1');
+    if (saved != null) {
+      const savedOpen = saved === '1';
+      setSidebarOpen(savedOpen);
+    }
   }, []);
 
   // Pull the saved tile layout once on mount (falls back to the default already
@@ -106,10 +110,17 @@ export function ConsoleShell({
     };
   }, [poll]);
 
-  const toggleSidebar = (open: boolean) => {
+  const toggleSidebar = useCallback((open: boolean) => {
     setSidebarOpen(open);
     window.localStorage.setItem(SIDEBAR_KEY, open ? '1' : '0');
-  };
+  }, []);
+
+  const handleBrowserVisibleChange = useCallback((visible: boolean) => {
+    setBrowserVisible(visible);
+    if (!visible) return;
+    if (window.matchMedia('(max-width: 1100px)').matches) setDrawerOpen(true);
+    else toggleSidebar(true);
+  }, [toggleSidebar]);
 
   // The mobile drawer lives inside this page's stacking context, so it cannot
   // layer above the global BrandNav pill — hide the pill while the drawer is
@@ -197,7 +208,10 @@ export function ConsoleShell({
           <AssistantSidebar
             provider={assistantProvider}
             open={drawerOpen}
+            browserVisible={browserVisible}
+            onBrowserVisibleChange={handleBrowserVisibleChange}
             onClose={() => {
+              setBrowserVisible(false);
               // Mobile closes the drawer; desktop collapses (and remembers it).
               if (window.matchMedia('(max-width: 1100px)').matches) setDrawerOpen(false);
               else toggleSidebar(false);

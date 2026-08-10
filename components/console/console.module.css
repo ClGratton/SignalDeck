@@ -120,6 +120,11 @@
   .wrap[data-sidebar] .body {
     grid-template-columns: minmax(0, 1fr) 360px;
   }
+  .wrap:not([data-sidebar]) .sidebarSlot {
+    overflow: hidden;
+    visibility: hidden;
+    pointer-events: none;
+  }
 }
 
 .grid {
@@ -507,6 +512,7 @@
 }
 
 .sidebarSlot {
+  position: relative;
   min-width: 0;
   height: 100%;
 }

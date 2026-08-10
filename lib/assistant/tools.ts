@@ -75,6 +75,8 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Active chat id — scopes the per-chat workspace (notes + plan) tools. */
   chatId?: string;
+  /** Stable transcript-prefix length for explicit provider caching. */
+  cachePrefixTurns?: number;
   /** True for request-scoped text utilities such as /compact. Utility calls
    *  must not receive action, web, memory, or browser tools. */
   utility?: boolean;

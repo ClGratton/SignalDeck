@@ -119,6 +119,7 @@ interface LiveTask extends TaskRecord {
 
 const MAX_LOG = 2000;
 const MAX_ITEMS = 400;
+const MAX_RESUME_CHECKPOINT_CHARS = 6_000;
 const TERMINAL_RETAIN_MS = 120_000; // keep finished tasks briefly for reattach
 const PERSIST_FILE = path.join(process.cwd(), 'data', 'assistant-tasks.json');
 
@@ -282,10 +283,8 @@ function turnsFromItems(items: ProjItem[]): ChatTurn[] {
             : `"${it.title}" ran`;
       const parts = [head];
       if (it.request) parts.push(`sent ${clip(it.request, 300)}`);
-      if (it.detail) parts.push(`result: ${clip(it.detail, 1500)}`);
+      if (it.detail) parts.push(`result: ${clip(it.detail, 800)}`);
       raw.push({ role: 'user', content: `(tool result — ${parts.join('; ')})` });
-    } else if (it.kind === 'tool') {
-      raw.push({ role: 'user', content: `(tool result — looked up: ${it.label})` });
     } else if (it.kind === 'timer' && it.status !== 'running') {
       raw.push({
         role: 'user',
@@ -296,7 +295,18 @@ function turnsFromItems(items: ProjItem[]): ChatTurn[] {
       });
     }
   }
-  return raw;
+  // Timer wakes need recent evidence, not a verbatim replay of an unbounded
+  // monitor. The original request stays in task.turns and the current plan is
+  // injected independently, so retain only the newest complete checkpoint rows.
+  const bounded: ChatTurn[] = [];
+  let chars = 0;
+  for (let i = raw.length - 1; i >= 0; i--) {
+    const content = clip(raw[i].content, 1_200);
+    if (bounded.length > 0 && chars + content.length > MAX_RESUME_CHECKPOINT_CHARS) break;
+    bounded.push({ ...raw[i], content });
+    chars += content.length;
+  }
+  return bounded.reverse();
 }
 
 // ── Chat-store write (so a detached operator still sees the turn) ─────────────
@@ -360,6 +370,7 @@ function makeCtx(task: LiveTask): ToolContext {
     awaitDecision: (id, signal) => awaitDecision(id, signal),
     signal: task.abort.signal,
     chatId: task.chatId,
+    cachePrefixTurns: task.turns.length,
     sleep: undefined,
   };
 }
