@@ -9,6 +9,7 @@ import 'server-only';
 import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
 import { maxAgentSteps } from '@/lib/assistant/config';
+import { readSseData } from '@/lib/assistant/sse';
 import type { AssistantProvider, ChatTurn, ReasoningEffort } from '@/lib/assistant/types';
 
 interface ToolCall {
@@ -102,45 +103,33 @@ async function runResponsesTurn(
     let output: ResponseInputItem[] = [];
     let completed = false;
     let streamError: string | null = null;
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        let event: {
-          type?: string;
-          delta?: string;
-          message?: string;
-          error?: { message?: string };
-          response?: { output?: ResponseInputItem[]; error?: { message?: string } };
-        };
-        try {
-          event = JSON.parse(payload);
-        } catch {
-          continue;
-        }
-        if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
-          emit({ type: 'text', text: event.delta });
-        } else if (event.type === 'response.completed') {
-          output = Array.isArray(event.response?.output) ? event.response.output : [];
-          completed = true;
-        } else if (event.type === 'response.failed') {
-          streamError = event.response?.error?.message ?? 'OpenAI could not complete the response.';
-        } else if (event.type === 'response.incomplete') {
-          streamError = 'OpenAI returned an incomplete response.';
-        } else if (event.type === 'error') {
-          streamError = event.error?.message ?? event.message ?? 'OpenAI returned a streaming error.';
-        }
+    await readSseData(res.body, (payload) => {
+      if (payload === '[DONE]') return;
+      let event: {
+        type?: string;
+        delta?: string;
+        message?: string;
+        error?: { message?: string };
+        response?: { output?: ResponseInputItem[]; error?: { message?: string } };
+      };
+      try {
+        event = JSON.parse(payload);
+      } catch {
+        return;
       }
-    }
+      if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+        emit({ type: 'text', text: event.delta });
+      } else if (event.type === 'response.completed') {
+        output = Array.isArray(event.response?.output) ? event.response.output : [];
+        completed = true;
+      } else if (event.type === 'response.failed') {
+        streamError = event.response?.error?.message ?? 'OpenAI could not complete the response.';
+      } else if (event.type === 'response.incomplete') {
+        streamError = 'OpenAI returned an incomplete response.';
+      } else if (event.type === 'error') {
+        streamError = event.error?.message ?? event.message ?? 'OpenAI returned a streaming error.';
+      }
+    });
 
     if (streamError) {
       emit({ type: 'error', message: `openai: ${streamError}` });
@@ -235,58 +224,46 @@ async function runChatCompletionsTurn(
 
     let text = '';
     const callsByIndex = new Map<number, ToolCall>();
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        let chunk: {
-          choices?: {
-            delta?: {
-              content?: string;
-              reasoning_content?: string;
-              reasoning?: string;
-              tool_calls?: {
-                index: number;
-                id?: string;
-                function?: { name?: string; arguments?: string };
-              }[];
-            };
-          }[];
-        };
-        try {
-          chunk = JSON.parse(payload);
-        } catch {
-          continue;
-        }
-        const delta = chunk.choices?.[0]?.delta;
-        if (!delta) continue;
-        // DeepSeek reasoner (and some OpenAI-compatible models) stream the chain
-        // of thought separately — surface it as collapsible reasoning, not answer.
-        const reason = delta.reasoning_content ?? delta.reasoning;
-        if (reason) emit({ type: 'reasoning', text: reason });
-        if (delta.content) {
-          text += delta.content;
-          emit({ type: 'text', text: delta.content });
-        }
-        // Tool calls stream in fragments keyed by index; accumulate them.
-        for (const tc of delta.tool_calls ?? []) {
-          const cur = callsByIndex.get(tc.index) ?? { id: '', name: '', arguments: '' };
-          if (tc.id) cur.id = tc.id;
-          if (tc.function?.name) cur.name = tc.function.name;
-          if (tc.function?.arguments) cur.arguments += tc.function.arguments;
-          callsByIndex.set(tc.index, cur);
-        }
+    await readSseData(res.body, (payload) => {
+      if (payload === '[DONE]') return;
+      let chunk: {
+        choices?: {
+          delta?: {
+            content?: string;
+            reasoning_content?: string;
+            reasoning?: string;
+            tool_calls?: {
+              index: number;
+              id?: string;
+              function?: { name?: string; arguments?: string };
+            }[];
+          };
+        }[];
+      };
+      try {
+        chunk = JSON.parse(payload);
+      } catch {
+        return;
       }
-    }
+      const delta = chunk.choices?.[0]?.delta;
+      if (!delta) return;
+      // DeepSeek reasoner (and some OpenAI-compatible models) stream the chain
+      // of thought separately — surface it as collapsible reasoning, not answer.
+      const reason = delta.reasoning_content ?? delta.reasoning;
+      if (reason) emit({ type: 'reasoning', text: reason });
+      if (delta.content) {
+        text += delta.content;
+        emit({ type: 'text', text: delta.content });
+      }
+      // Tool calls stream in fragments keyed by index; accumulate them.
+      for (const tc of delta.tool_calls ?? []) {
+        const cur = callsByIndex.get(tc.index) ?? { id: '', name: '', arguments: '' };
+        if (tc.id) cur.id = tc.id;
+        if (tc.function?.name) cur.name = tc.function.name;
+        if (tc.function?.arguments) cur.arguments += tc.function.arguments;
+        callsByIndex.set(tc.index, cur);
+      }
+    });
 
     const calls = [...callsByIndex.values()].filter((c) => c.name);
     if (calls.length === 0) return; // plain answer — turn complete
