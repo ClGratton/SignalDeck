@@ -9,6 +9,10 @@ import 'server-only';
 import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
 import { maxAgentSteps } from '@/lib/assistant/config';
+import {
+  readOpenAiResponseStream,
+  type OpenAiStreamEvent,
+} from '@/lib/assistant/openai-stream';
 import { readSseData } from '@/lib/assistant/sse';
 import type { AssistantProvider, ChatTurn, ReasoningEffort } from '@/lib/assistant/types';
 
@@ -55,9 +59,27 @@ async function emitHttpError(
   emit({ type: 'error', message: detail });
 }
 
-/** Official OpenAI path. `store:false` keeps operator data out of stored
- * responses; every returned output item (including encrypted reasoning items)
- * is replayed during the in-turn tool loop as required by the Responses API. */
+async function cancelBackgroundResponse(
+  responsesUrl: string,
+  responseId: string,
+  apiKey: string,
+): Promise<void> {
+  try {
+    await fetch(`${responsesUrl}/${encodeURIComponent(responseId)}/cancel`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch {
+    /* best-effort cost cleanup after an explicit operator stop */
+  }
+}
+
+/** Official OpenAI path. Background streaming lets long reasoning survive a
+ * dropped upstream connection; `store:false` is retained (OpenAI temporarily
+ * holds the response only so it can be resumed). Every returned output item,
+ * including encrypted reasoning, is replayed during the in-turn tool loop. */
 async function runResponsesTurn(
   apiKey: string,
   baseUrl: string,
@@ -88,6 +110,7 @@ async function runResponsesTurn(
         tools: tools.length > 0 ? tools : undefined,
         reasoning: reasoningEffort ? { effort: reasoningEffort } : undefined,
         include: reasoningEffort ? ['reasoning.encrypted_content'] : undefined,
+        background: true,
         store: false,
         stream: true,
       }),
@@ -103,33 +126,64 @@ async function runResponsesTurn(
     let output: ResponseInputItem[] = [];
     let completed = false;
     let streamError: string | null = null;
-    await readSseData(res.body, (payload) => {
-      if (payload === '[DONE]') return;
-      let event: {
-        type?: string;
-        delta?: string;
-        message?: string;
-        error?: { message?: string };
-        response?: { output?: ResponseInputItem[]; error?: { message?: string } };
-      };
-      try {
-        event = JSON.parse(payload);
-      } catch {
-        return;
-      }
-      if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
-        emit({ type: 'text', text: event.delta });
-      } else if (event.type === 'response.completed') {
-        output = Array.isArray(event.response?.output) ? event.response.output : [];
-        completed = true;
-      } else if (event.type === 'response.failed') {
-        streamError = event.response?.error?.message ?? 'OpenAI could not complete the response.';
-      } else if (event.type === 'response.incomplete') {
-        streamError = 'OpenAI returned an incomplete response.';
-      } else if (event.type === 'error') {
-        streamError = event.error?.message ?? event.message ?? 'OpenAI returned a streaming error.';
-      }
+    const streamResult = await readOpenAiResponseStream({
+      initialResponse: res,
+      responsesUrl: url,
+      apiKey,
+      signal: ctx.signal,
+      onEvent: (rawEvent) => {
+        const event = rawEvent as OpenAiStreamEvent & {
+          delta?: string;
+          message?: string;
+          error?: { message?: string };
+          response?: {
+            id?: string;
+            output?: ResponseInputItem[];
+            error?: { message?: string };
+            incomplete_details?: { reason?: string };
+          };
+        };
+        if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+          emit({ type: 'text', text: event.delta });
+        } else if (event.type === 'response.completed') {
+          output = Array.isArray(event.response?.output) ? event.response.output : [];
+          completed = true;
+        } else if (event.type === 'response.failed') {
+          streamError =
+            event.response?.error?.message ?? 'OpenAI could not complete the response.';
+        } else if (event.type === 'response.incomplete') {
+          const reason = event.response?.incomplete_details?.reason;
+          streamError = reason
+            ? `OpenAI returned an incomplete response (${reason}).`
+            : 'OpenAI returned an incomplete response.';
+        } else if (event.type === 'error') {
+          streamError =
+            event.error?.message ?? event.message ?? 'OpenAI returned a streaming error.';
+        }
+      },
     });
+
+    if (streamResult.status === 'aborted') {
+      if (streamResult.responseId) {
+        await cancelBackgroundResponse(url, streamResult.responseId, apiKey);
+      }
+      return;
+    }
+    if (streamResult.status === 'http_error') {
+      await emitHttpError('openai', streamResult.response, emit);
+      return;
+    }
+    if (streamResult.status === 'disconnected') {
+      console.warn('[assistant] OpenAI background stream could not be resumed', {
+        responseId: streamResult.responseId,
+        lastSequence: streamResult.lastSequence,
+      });
+      emit({
+        type: 'error',
+        message: 'OpenAI connection dropped repeatedly before the response completed.',
+      });
+      return;
+    }
 
     if (streamError) {
       emit({ type: 'error', message: `openai: ${streamError}` });
