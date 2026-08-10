@@ -6,6 +6,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'server-only';
+import { createHash } from 'node:crypto';
 import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
 import { maxAgentSteps } from '@/lib/assistant/config';
@@ -38,10 +39,73 @@ interface ResponseFunctionCall extends ResponseInputItem {
   arguments: string;
 }
 
+interface ResponseUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  input_tokens_details?: {
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+  };
+  output_tokens_details?: { reasoning_tokens?: number };
+}
+
 const stripTrailingSlash = (value: string) => value.replace(/\/+$/, '');
 
 function usesOfficialResponsesApi(provider: AssistantProvider, baseUrl: string): boolean {
   return provider === 'openai' && stripTrailingSlash(baseUrl) === 'https://api.openai.com/v1';
+}
+
+function supportsExplicitPromptCache(model: string): boolean {
+  return model === 'gpt-5.6' || model.startsWith('gpt-5.6-');
+}
+
+function promptCacheKey(model: string, chatId?: string): string {
+  // Partition by chat to keep one busy agent loop below OpenAI's recommended
+  // per-key traffic level without sending the raw internal chat id upstream.
+  const scope = createHash('sha256')
+    .update(chatId ?? 'shared')
+    .digest('hex')
+    .slice(0, 16);
+  return `grtlabs:${model}:${scope}:v1`;
+}
+
+function responseInput(turns: ChatTurn[], explicitCache: boolean): ResponseInputItem[] {
+  let breakpoint = -1;
+  if (explicitCache) {
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].role === 'user') {
+        breakpoint = i;
+        break;
+      }
+    }
+  }
+  return turns.map((turn, index) =>
+    index === breakpoint
+      ? {
+          role: turn.role,
+          content: [
+            {
+              type: 'input_text',
+              text: turn.content,
+              prompt_cache_breakpoint: { mode: 'explicit' },
+            },
+          ],
+        }
+      : { role: turn.role, content: turn.content },
+  );
+}
+
+function logResponseUsage(model: string, request: number, usage?: ResponseUsage): void {
+  if (!usage) return;
+  console.info('[assistant] OpenAI token usage', {
+    model,
+    request,
+    inputTokens: usage.input_tokens ?? 0,
+    cachedTokens: usage.input_tokens_details?.cached_tokens ?? 0,
+    cacheWriteTokens: usage.input_tokens_details?.cache_write_tokens ?? 0,
+    outputTokens: usage.output_tokens ?? 0,
+    reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? 0,
+  });
 }
 
 async function emitHttpError(
@@ -96,7 +160,14 @@ async function runResponsesTurn(
     description: t.description,
     parameters: t.input_schema,
   }));
-  const input: ResponseInputItem[] = turns.map((t) => ({ role: t.role, content: t.content }));
+  const explicitCache = supportsExplicitPromptCache(model);
+  const input = responseInput(turns, explicitCache);
+  const cacheKey = explicitCache ? promptCacheKey(model, ctx.chatId) : undefined;
+  // Freeze the prompt for this run. Plan/memory tools can update server state
+  // between model calls, but their result already tells the model what changed;
+  // rebuilding the instructions here used to invalidate the entire cache on
+  // every plan_update/save_memory step.
+  const instructions = systemPrompt(ctx.mode, ctx.approval, ctx.chatId);
 
   const maxIterations = maxAgentSteps();
   for (let i = 0; i < maxIterations; i++) {
@@ -105,11 +176,17 @@ async function runResponsesTurn(
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model,
-        instructions: systemPrompt(ctx.mode, ctx.approval, ctx.chatId),
+        instructions,
         input,
         tools: tools.length > 0 ? tools : undefined,
         reasoning: reasoningEffort ? { effort: reasoningEffort } : undefined,
         include: reasoningEffort ? ['reasoning.encrypted_content'] : undefined,
+        ...(explicitCache
+          ? {
+              prompt_cache_key: cacheKey,
+              prompt_cache_options: { mode: 'explicit' },
+            }
+          : {}),
         background: true,
         store: false,
         stream: true,
@@ -124,6 +201,7 @@ async function runResponsesTurn(
     }
 
     let output: ResponseInputItem[] = [];
+    let usage: ResponseUsage | undefined;
     let completed = false;
     let streamError: string | null = null;
     const streamResult = await readOpenAiResponseStream({
@@ -139,6 +217,7 @@ async function runResponsesTurn(
           response?: {
             id?: string;
             output?: ResponseInputItem[];
+            usage?: ResponseUsage;
             error?: { message?: string };
             incomplete_details?: { reason?: string };
           };
@@ -147,6 +226,7 @@ async function runResponsesTurn(
           emit({ type: 'text', text: event.delta });
         } else if (event.type === 'response.completed') {
           output = Array.isArray(event.response?.output) ? event.response.output : [];
+          usage = event.response?.usage;
           completed = true;
         } else if (event.type === 'response.failed') {
           streamError =
@@ -193,6 +273,7 @@ async function runResponsesTurn(
       emit({ type: 'error', message: 'OpenAI stream ended before the response completed.' });
       return;
     }
+    logResponseUsage(model, i + 1, usage);
 
     const calls = output.filter(
       (item): item is ResponseFunctionCall =>

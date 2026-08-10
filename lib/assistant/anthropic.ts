@@ -34,13 +34,20 @@ export async function runAnthropicTurn(
     role: t.role,
     content: t.content,
   }));
+  // Keep the prefix byte-stable throughout this tool loop. Workspace/memory
+  // tools return their changes in-band, so rebuilding the system prompt here
+  // would only invalidate Anthropic's prompt cache.
+  const instructions = systemPrompt(ctx.mode, ctx.approval, ctx.chatId);
 
   const maxIterations = maxAgentSteps();
   for (let i = 0; i < maxIterations; i++) {
     const stream = client.messages.stream({
       model,
       max_tokens: 16000,
-      system: systemPrompt(ctx.mode, ctx.approval, ctx.chatId),
+      system: instructions,
+      // Anthropic automatic caching is supported by every active Claude model
+      // and advances the breakpoint as the conversation/tool history grows.
+      cache_control: { type: 'ephemeral' },
       ...(supportsAdaptiveThinking(model) ? { thinking: { type: 'adaptive' as const } } : {}),
       tools,
       messages,
@@ -48,6 +55,14 @@ export async function runAnthropicTurn(
     stream.on('text', (delta) => emit({ type: 'text', text: delta }));
     stream.on('thinking', (delta) => emit({ type: 'reasoning', text: delta }));
     const message = await stream.finalMessage();
+    console.info('[assistant] Anthropic token usage', {
+      model,
+      request: i + 1,
+      inputTokens: message.usage.input_tokens,
+      cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
+      outputTokens: message.usage.output_tokens,
+    });
 
     messages.push({ role: 'assistant', content: message.content });
 

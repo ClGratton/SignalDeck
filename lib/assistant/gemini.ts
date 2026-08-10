@@ -24,6 +24,13 @@ interface GeminiContent {
   role: 'user' | 'model';
   parts: GeminiPart[];
 }
+interface GeminiUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  cachedContentTokenCount?: number;
+  thoughtsTokenCount?: number;
+  totalTokenCount?: number;
+}
 
 export async function runGeminiTurn(
   apiKey: string,
@@ -47,6 +54,10 @@ export async function runGeminiTurn(
       })),
     },
   ];
+  // Gemini 2.5+ applies implicit prefix caching automatically. Keeping this
+  // fixed during the loop gives that native cache a stable system prefix;
+  // older models simply ignore the optimization without receiving new fields.
+  const instructions = systemPrompt(ctx.mode, ctx.approval, ctx.chatId);
 
   const maxIterations = maxAgentSteps();
   for (let i = 0; i < maxIterations; i++) {
@@ -54,7 +65,7 @@ export async function runGeminiTurn(
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt(ctx.mode, ctx.approval, ctx.chatId) }] },
+        systemInstruction: { parts: [{ text: instructions }] },
         contents,
         tools,
       }),
@@ -81,6 +92,7 @@ export async function runGeminiTurn(
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let usage: GeminiUsageMetadata | undefined;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -91,12 +103,16 @@ export async function runGeminiTurn(
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
         if (!payload || payload === '[DONE]') continue;
-        let chunk: { candidates?: { content?: { parts?: GeminiPart[] } }[] };
+        let chunk: {
+          candidates?: { content?: { parts?: GeminiPart[] } }[];
+          usageMetadata?: GeminiUsageMetadata;
+        };
         try {
           chunk = JSON.parse(payload);
         } catch {
           continue;
         }
+        if (chunk.usageMetadata) usage = chunk.usageMetadata;
         for (const part of chunk.candidates?.[0]?.content?.parts ?? []) {
           if (part.text) {
             emit(part.thought ? { type: 'reasoning', text: part.text } : { type: 'text', text: part.text });
@@ -115,6 +131,17 @@ export async function runGeminiTurn(
           }
         }
       }
+    }
+    if (usage) {
+      console.info('[assistant] Gemini token usage', {
+        model,
+        request: i + 1,
+        inputTokens: usage.promptTokenCount ?? 0,
+        cachedTokens: usage.cachedContentTokenCount ?? 0,
+        outputTokens: usage.candidatesTokenCount ?? 0,
+        reasoningTokens: usage.thoughtsTokenCount ?? 0,
+        totalTokens: usage.totalTokenCount ?? 0,
+      });
     }
 
     if (modelParts.length > 0) contents.push({ role: 'model', parts: modelParts });
