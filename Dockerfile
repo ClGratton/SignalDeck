@@ -39,6 +39,13 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 
+# `playwright-core` reads runtime assets (including browsers.json) with ordinary
+# Node resolution. Next's standalone file tracer only copies the JS files it can
+# see statically, which leaves those assets out and makes importing the assistant
+# task stack fail before any request can start. Overlay the complete package onto
+# the traced node_modules; Chromium itself is still the system package above.
+COPY --from=deps /app/node_modules/playwright-core ./node_modules/playwright-core
+
 # Runtime state lives here; mount a volume so redeploys keep it.
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node
