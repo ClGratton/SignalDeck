@@ -27,6 +27,8 @@ import {
   Globe2,
   History,
   KeyRound,
+  FileText,
+  Paperclip,
   Plus,
   RotateCcw,
   RefreshCw,
@@ -42,6 +44,8 @@ import type {
   AssistantEvent,
   AssistantMode,
   AssistantProvider,
+  AttachmentKind,
+  ChatAttachment,
   ChatTurn,
   ChatWorkspaceDto,
   MemoryNoteDto,
@@ -59,7 +63,7 @@ type ProposalState = 'pending' | 'running' | 'ok' | 'fail' | 'gone';
 type BrowserFrame = Extract<AssistantEvent, { type: 'browser' }>;
 
 type Item =
-  | { kind: 'user'; text: string; at?: number }
+  | { kind: 'user'; text: string; attachments?: ChatAttachment[]; at?: number }
   | { kind: 'assistant'; text: string }
   | { kind: 'reasoning'; text: string }
   | { kind: 'tool'; label: string }
@@ -80,6 +84,7 @@ interface StoredChat {
   title: string;
   createdAt: number;
   updatedAt: number;
+  serverVersion?: number;
   items: Item[];
 }
 
@@ -91,10 +96,14 @@ const MRU_KEY = 'grtlabs:assistant-mru:v1';
 const REASONING_KEY = 'grtlabs:assistant-reasoning:v1';
 const MRU_MAX = 3; // how many recently-used models lead the menu per provider
 const DRAFT_KEY = 'grtlabs:assistant-draft';
+const DRAFT_ATTACHMENTS_KEY = 'grtlabs:assistant-draft-attachments';
 const MODE_KEY = 'grtlabs:assistant-mode';
 const APPROVAL_KEY = 'grtlabs:assistant-approval';
 const LEGACY_ACTIONS_KEY = 'grtlabs:assistant-actions';
 const MAX_CHATS = 30;
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 7 * 1024 * 1024;
+const MAX_ATTACHMENTS_TOTAL_BYTES = 12 * 1024 * 1024;
 // Keep the FULL chat scrollable — a long agent run produces many tool/action
 // rows, and capping low silently dropped the start of the conversation. Matches
 // the server store cap (MAX_ITEMS_PER_CHAT) so nothing is lost between them.
@@ -162,6 +171,34 @@ const fmtClock = (ts: number) => {
   }
 };
 
+function sanitizeAttachments(raw: unknown): ChatAttachment[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const kinds: AttachmentKind[] = ['image', 'pdf', 'text', 'document', 'spreadsheet'];
+  const out = raw.filter((value): value is ChatAttachment => {
+    if (!value || typeof value !== 'object') return false;
+    const item = value as Partial<ChatAttachment>;
+    return (
+      typeof item.id === 'string' && /^[0-9a-f-]{36}$/i.test(item.id) &&
+      typeof item.name === 'string' && typeof item.mimeType === 'string' &&
+      typeof item.size === 'number' && item.size > 0 &&
+      typeof item.kind === 'string' && kinds.includes(item.kind as AttachmentKind)
+    );
+  });
+  return out.slice(0, MAX_ATTACHMENTS).map((item) => ({ ...item }));
+}
+
+function attachmentKindForFile(file: File): AttachmentKind | null {
+  const mime = file.type.toLowerCase();
+  if (['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) return 'image';
+  if (mime === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) return 'pdf';
+  if (mime.startsWith('text/') || ['application/json', 'application/xml', 'application/javascript'].includes(mime)) return 'text';
+  const ext = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
+  if (['.txt', '.md', '.json', '.csv', '.tsv', '.js', '.jsx', '.ts', '.tsx', '.py', '.sh', '.yaml', '.yml', '.xml', '.html', '.css', '.sql', '.log'].includes(ext)) return 'text';
+  if (['.doc', '.docx', '.rtf', '.ppt', '.pptx', '.odt'].includes(ext)) return 'document';
+  if (['.xls', '.xlsx', '.ods'].includes(ext)) return 'spreadsheet';
+  return null;
+}
+
 /** Re-hydrate persisted items; pending proposals died with their server closure. */
 function sanitizeItems(raw: unknown): Item[] {
   if (!Array.isArray(raw)) return [];
@@ -170,7 +207,12 @@ function sanitizeItems(raw: unknown): Item[] {
     if (!it || typeof it !== 'object') continue;
     if (it.kind === 'user') {
       if (typeof it.text === 'string') {
-        out.push({ kind: 'user', text: it.text, ...(typeof it.at === 'number' ? { at: it.at } : {}) });
+        out.push({
+          kind: 'user',
+          text: it.text,
+          ...(sanitizeAttachments(it.attachments) ? { attachments: sanitizeAttachments(it.attachments) } : {}),
+          ...(typeof it.at === 'number' ? { at: it.at } : {}),
+        });
       }
     } else if (it.kind === 'assistant' || it.kind === 'error') {
       if (typeof it.text === 'string') out.push({ kind: it.kind, text: it.text });
@@ -224,7 +266,11 @@ function mergeChats(a: StoredChat[], b: StoredChat[]): StoredChat[] {
   const byId = new Map<string, StoredChat>();
   for (const c of [...a, ...b]) {
     const prev = byId.get(c.id);
-    if (!prev || c.updatedAt > prev.updatedAt) byId.set(c.id, c);
+    const version = c.serverVersion ?? 0;
+    const previousVersion = prev?.serverVersion ?? 0;
+    if (!prev || version > previousVersion || (version === previousVersion && c.updatedAt > prev.updatedAt)) {
+      byId.set(c.id, c);
+    }
   }
   return [...byId.values()].sort((x, y) => y.updatedAt - x.updatedAt).slice(0, MAX_CHATS);
 }
@@ -266,7 +312,10 @@ function mergeConsecutive(turns: ChatTurn[]): ChatTurn[] {
   const out: ChatTurn[] = [];
   for (const t of turns) {
     const last = out[out.length - 1];
-    if (last && last.role === t.role) last.content += '\n' + t.content;
+    if (last && last.role === t.role) {
+      last.content += '\n' + t.content;
+      if (t.attachments?.length) last.attachments = [...(last.attachments ?? []), ...t.attachments];
+    }
     else out.push({ ...t });
   }
   return out;
@@ -293,7 +342,9 @@ function buildHistory(items: Item[]): ChatTurn[] {
           content: `Summary of our conversation so far — continue from this:\n\n${it.summary}`,
         },
       ];
-    } else if (it.kind === 'user') raw.push({ role: 'user', content: it.text });
+    } else if (it.kind === 'user') {
+      raw.push({ role: 'user', content: it.text, attachments: it.attachments });
+    }
     else if (it.kind === 'assistant' && it.text) raw.push({ role: 'assistant', content: it.text });
     else if (
       it.kind === 'action' &&
@@ -341,6 +392,11 @@ export function AssistantSidebar({
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
   const [input, setInput] = useState('');
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   // Flips true once the chat collection has loaded/reconciled, so the one-time
   // task-reattach pass can run against the right active chat.
@@ -647,6 +703,10 @@ export function AssistantSidebar({
       // Restore an unsent draft so a reload never loses what you were typing.
       const savedDraft = window.localStorage.getItem(DRAFT_KEY);
       if (savedDraft) setInput(savedDraft);
+      const savedAttachments = sanitizeAttachments(
+        JSON.parse(window.localStorage.getItem(DRAFT_ATTACHMENTS_KEY) ?? '[]'),
+      );
+      if (savedAttachments?.length) setAttachments(savedAttachments);
     } catch {
       /* keep defaults */
     }
@@ -667,6 +727,19 @@ export function AssistantSidebar({
       /* storage blocked — draft just won't survive a reload */
     }
   }, [input]);
+
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    try {
+      if (attachments.length) {
+        window.localStorage.setItem(DRAFT_ATTACHMENTS_KEY, JSON.stringify(attachments));
+      } else {
+        window.localStorage.removeItem(DRAFT_ATTACHMENTS_KEY);
+      }
+    } catch {
+      /* storage blocked — uploaded bytes remain server-side */
+    }
+  }, [attachments]);
 
   // Persist the live transcript (debounced — streaming mutates items rapidly).
   useEffect(() => {
@@ -718,6 +791,8 @@ export function AssistantSidebar({
         : null,
     [catalog, effective],
   );
+  const attachmentKinds = activeModelOption?.attachmentKinds ?? [];
+  const unsupportedAttachment = attachments.find((item) => !attachmentKinds.includes(item.kind));
   const reasoningOptions = activeModelOption?.reasoningEfforts ?? [];
   const reasoningKey = effective ? `${effective.provider}:${effective.model}` : '';
   const savedReasoning = reasoningKey ? reasoningByModel[reasoningKey] : undefined;
@@ -864,6 +939,68 @@ export function AssistantSidebar({
 
   // ── Chats ───────────────────────────────────────────────────────────────
 
+  const uploadFiles = useCallback(async (incoming: File[]) => {
+    setAttachmentError(null);
+    if (!effective || attachmentKinds.length === 0) {
+      setAttachmentError('The selected model does not accept file attachments.');
+      return;
+    }
+    const files = incoming.filter((file) => file.size > 0);
+    if (files.length === 0) return;
+    if (attachments.length + files.length > MAX_ATTACHMENTS) {
+      setAttachmentError(`Attach at most ${MAX_ATTACHMENTS} files.`);
+      return;
+    }
+    for (const file of files) {
+      const kind = attachmentKindForFile(file);
+      if (!kind) {
+        setAttachmentError(`${file.name} is not a supported file type.`);
+        return;
+      }
+      if (!attachmentKinds.includes(kind)) {
+        setAttachmentError(`${activeModelOption?.label ?? 'This model'} does not support ${kind} attachments.`);
+        return;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setAttachmentError(`${file.name} exceeds the 7 MB per-file limit.`);
+        return;
+      }
+    }
+    const total = attachments.reduce((sum, item) => sum + item.size, 0) +
+      files.reduce((sum, file) => sum + file.size, 0);
+    if (total > MAX_ATTACHMENTS_TOTAL_BYTES) {
+      setAttachmentError('Attachments exceed the 12 MB combined limit.');
+      return;
+    }
+    const form = new FormData();
+    for (const file of files) form.append('files', file, file.name);
+    setAttachmentBusy(true);
+    try {
+      const response = await fetch('/api/assistant/attachments', { method: 'POST', body: form });
+      const body = (await response.json()) as { attachments?: ChatAttachment[]; error?: string };
+      if (response.status === 401) setSessionExpired(true);
+      if (!response.ok || !body.attachments) {
+        setAttachmentError(body.error ?? 'Upload failed.');
+        return;
+      }
+      setAttachments((current) => [...current, ...body.attachments!].slice(0, MAX_ATTACHMENTS));
+    } catch {
+      setAttachmentError('Upload failed. Check the connection and try again.');
+    } finally {
+      setAttachmentBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, [activeModelOption?.label, attachmentKinds, attachments, effective]);
+
+  const removeDraftAttachment = useCallback((id: string) => {
+    setAttachments((current) => current.filter((item) => item.id !== id));
+    void fetch('/api/assistant/attachments', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }).catch(() => undefined);
+  }, []);
+
   const detachActiveStream = useCallback((chatId: string | null) => {
     const controller = abortRef.current;
     if (chatId && controller) detachingSignalsRef.current.add(controller.signal);
@@ -913,6 +1050,10 @@ export function AssistantSidebar({
 
   const deleteChat = (id: string) => {
     if (serverOwnedRef.current.has(id)) return;
+    const removed = chatsRef.current.find((chat) => chat.id === id);
+    const attachmentIds = new Set(
+      removed?.items.flatMap((item) => item.kind === 'user' ? (item.attachments ?? []).map((a) => a.id) : []) ?? [],
+    );
     chatsRef.current = chatsRef.current.filter((c) => c.id !== id);
     if (activeIdRef.current === id) {
       detachActiveStream(id);
@@ -921,6 +1062,24 @@ export function AssistantSidebar({
     }
     writeChats();
     setChatList([...chatsRef.current].sort((a, b) => b.updatedAt - a.updatedAt));
+    void fetch('/api/assistant/chats', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }).catch(() => undefined);
+    const stillReferenced = new Set(
+      chatsRef.current.flatMap((chat) => chat.items.flatMap((item) =>
+        item.kind === 'user' ? (item.attachments ?? []).map((a) => a.id) : [],
+      )),
+    );
+    for (const attachmentId of attachmentIds) {
+      if (stillReferenced.has(attachmentId) || attachments.some((item) => item.id === attachmentId)) continue;
+      void fetch('/api/assistant/attachments', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: attachmentId }),
+      }).catch(() => undefined);
+    }
   };
 
   // ── Memory ──────────────────────────────────────────────────────────────
@@ -1316,10 +1475,10 @@ export function AssistantSidebar({
     }
   }, []);
 
-  // The turn (for this chat) is over: release the lock + ownership. `reload`
-  // pulls the server-written transcript (needed when we missed live events).
+  // The turn is over: release the lock, then always converge on the versioned
+  // server transcript. Live frames are a convenience, never the final authority.
   const finishTurn = useCallback(
-    (chatId: string, opts?: { reload?: boolean }) => {
+    (chatId: string, _opts?: { reload?: boolean }) => {
       unmarkServerOwned(chatId);
       const isActive = activeIdRef.current === chatId;
       if (isActive) {
@@ -1327,9 +1486,7 @@ export function AssistantSidebar({
         abortRef.current = null;
         requestAnimationFrame(() => inputRef.current?.focus());
       }
-      // An inactive chat did not apply its live frames, so always refresh it
-      // from server truth when its background task finishes.
-      if (opts?.reload || !isActive) void reloadChatFromServer(chatId);
+      void reloadChatFromServer(chatId);
     },
     [reloadChatFromServer, unmarkServerOwned],
   );
@@ -1459,8 +1616,13 @@ export function AssistantSidebar({
   const send = useCallback(
     async (raw: string) => {
       const text = raw.trim();
-      if (!text || busy || !effective) return;
-      if (text.startsWith('/')) {
+      const sentAttachments = attachments;
+      if ((!text && sentAttachments.length === 0) || busy || attachmentBusy || !effective) return;
+      if (unsupportedAttachment) {
+        setAttachmentError(`${activeModelOption?.label ?? 'This model'} does not support ${unsupportedAttachment.kind} attachments.`);
+        return;
+      }
+      if (text.startsWith('/') && sentAttachments.length === 0) {
         const sp = text.indexOf(' ');
         const name = (sp === -1 ? text.slice(1) : text.slice(1, sp)).toLowerCase();
         const skill = SKILLS.find((s) => s.name === name);
@@ -1471,6 +1633,8 @@ export function AssistantSidebar({
         // unknown /command → fall through and send it as a normal message
       }
       setInput('');
+      setAttachments([]);
+      setAttachmentError(null);
       setBusy(true);
       setMenuOpen(false);
       // Mint the chat id now so the server can key this chat's task + workspace
@@ -1486,7 +1650,12 @@ export function AssistantSidebar({
       // model keeps its execution memory across turns (see buildHistory). Built
       // OUTSIDE the state updater (updaters can run twice in StrictMode).
       const history: ChatTurn[] = buildHistory(items);
-      setItems((prev) => [...prev, { kind: 'user', text, at: Date.now() }]);
+      setItems((prev) => [...prev, {
+        kind: 'user',
+        text,
+        ...(sentAttachments.length ? { attachments: sentAttachments } : {}),
+        at: Date.now(),
+      }]);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -1495,7 +1664,10 @@ export function AssistantSidebar({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: mergeConsecutive([...history, { role: 'user', content: sent }]),
+            messages: mergeConsecutive([
+              ...history,
+              { role: 'user', content: sent, attachments: sentAttachments },
+            ]),
             mode,
             approval,
             provider: effective.provider,
@@ -1557,6 +1729,10 @@ export function AssistantSidebar({
     },
     [
       busy,
+      attachmentBusy,
+      attachments,
+      unsupportedAttachment,
+      activeModelOption?.label,
       effective,
       mode,
       approval,
@@ -1793,6 +1969,8 @@ export function AssistantSidebar({
       const before = cur.slice(0, idx);
       setItems(before);
       setInput(target.text);
+      setAttachments(target.attachments ?? []);
+      setAttachmentError(null);
       flush(before);
       requestAnimationFrame(() => inputRef.current?.focus());
     },
@@ -2596,18 +2774,93 @@ export function AssistantSidebar({
           : null}
 
 
+        {attachments.length > 0 || attachmentBusy ? (
+          <div className={styles.attachmentTray} aria-label="Attachments">
+            {attachments.map((item) => (
+              <span key={item.id} className={styles.attachmentChip} data-kind={item.kind}>
+                {item.kind === 'image' ? (
+                  <img
+                    className={styles.attachmentThumb}
+                    src={`/api/assistant/attachments?id=${encodeURIComponent(item.id)}`}
+                    alt=""
+                  />
+                ) : (
+                  <FileText size={14} strokeWidth={2.1} aria-hidden />
+                )}
+                <span className={styles.attachmentName} title={item.name}>{item.name}</span>
+                <button
+                  type="button"
+                  className={styles.attachmentRemove}
+                  onClick={() => removeDraftAttachment(item.id)}
+                  aria-label={`Remove ${item.name}`}
+                >
+                  <X size={12} strokeWidth={2.4} aria-hidden />
+                </button>
+              </span>
+            ))}
+            {attachmentBusy ? <span className={styles.attachmentProgress}>Uploading…</span> : null}
+          </div>
+        ) : null}
+        {attachmentError || unsupportedAttachment ? (
+          <p className={styles.attachmentError} role="alert">
+            {attachmentError ?? `${activeModelOption?.label ?? 'This model'} does not support ${unsupportedAttachment?.kind} attachments.`}
+          </p>
+        ) : null}
+
         <form
           className={styles.composer}
+          data-dragging={draggingFiles || undefined}
           onSubmit={(e) => {
             e.preventDefault();
             void send(input);
           }}
+          onDragEnter={(e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+              e.preventDefault();
+              setDraggingFiles(true);
+            }
+          }}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDraggingFiles(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDraggingFiles(false);
+            void uploadFiles(Array.from(e.dataTransfer.files));
+          }}
         >
+          <input
+            ref={fileInputRef}
+            className={styles.fileInput}
+            type="file"
+            multiple
+            accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.json,.csv,.tsv,.js,.jsx,.ts,.tsx,.py,.sh,.yaml,.yml,.xml,.html,.css,.sql,.log,.doc,.docx,.rtf,.ppt,.pptx,.odt,.xls,.xlsx,.ods"
+            onChange={(e) => void uploadFiles(Array.from(e.target.files ?? []))}
+            disabled={!effective || busy || timerLocks || attachmentBusy || attachmentKinds.length === 0}
+            aria-label="Attach files"
+          />
+          <button
+            type="button"
+            className={styles.attachBtn}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!effective || busy || timerLocks || attachmentBusy || attachmentKinds.length === 0}
+            aria-label="Attach files"
+            title={attachmentKinds.length ? 'Attach files' : 'This model does not accept attachments'}
+          >
+            <Paperclip size={15} strokeWidth={2.2} aria-hidden />
+          </button>
           <textarea
             ref={inputRef}
             className={styles.input}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));
+              if (files.length) void uploadFiles(files);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -2642,7 +2895,10 @@ export function AssistantSidebar({
             <button
               type="submit"
               className={styles.sendBtn}
-              disabled={!effective || input.trim() === ''}
+              disabled={
+                !effective || attachmentBusy || !!unsupportedAttachment ||
+                (input.trim() === '' && attachments.length === 0)
+              }
               aria-label="Send"
             >
               <Send size={15} strokeWidth={2.2} aria-hidden />
@@ -3018,7 +3274,32 @@ function UserMessage({
   };
   return (
     <div className={styles.userWrap}>
-      <div className={styles.user}>{item.text}</div>
+      {item.attachments?.length ? (
+        <div className={styles.sentAttachments}>
+          {item.attachments.map((attachment) => (
+            <a
+              key={attachment.id}
+              className={styles.sentAttachment}
+              href={`/api/assistant/attachments?id=${encodeURIComponent(attachment.id)}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open ${attachment.name}`}
+            >
+              {attachment.kind === 'image' ? (
+                <img
+                  className={styles.sentAttachmentImage}
+                  src={`/api/assistant/attachments?id=${encodeURIComponent(attachment.id)}`}
+                  alt={attachment.name}
+                />
+              ) : (
+                <FileText size={15} strokeWidth={2.1} aria-hidden />
+              )}
+              <span>{attachment.name}</span>
+            </a>
+          ))}
+        </div>
+      ) : null}
+      {item.text ? <div className={styles.user}>{item.text}</div> : null}
       <div className={styles.msgFoot}>
         {item.at ? <span className={styles.msgTime}>{fmtClock(item.at)}</span> : null}
         <span className={styles.msgActions}>

@@ -10,6 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
 import { maxAgentSteps } from '@/lib/assistant/config';
+import { readAttachment } from '@/lib/assistant/attachments';
 import type { ChatTurn } from '@/lib/assistant/types';
 
 // Adaptive thinking only exists on the newest models; sending it to older ones
@@ -30,10 +31,29 @@ export async function runAnthropicTurn(
     input_schema: t.input_schema as Anthropic.Tool['input_schema'],
   }));
 
-  const messages: Anthropic.MessageParam[] = turns.map((t) => ({
-    role: t.role,
-    content: t.content,
-  }));
+  const messages: Anthropic.MessageParam[] = turns.map((t) => {
+    if (t.role !== 'user' || !t.attachments?.length) return { role: t.role, content: t.content };
+    const content: Record<string, unknown>[] = [];
+    if (t.content) content.push({ type: 'text', text: t.content });
+    for (const ref of t.attachments) {
+      const attachment = readAttachment(ref.id);
+      const data = attachment.bytes.toString('base64');
+      if (attachment.kind === 'image') {
+        content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: attachment.mimeType, data },
+        });
+      } else if (attachment.kind === 'pdf') {
+        content.push({
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data },
+        });
+      } else if (attachment.kind === 'text') {
+        content.push({ type: 'text', text: `\n--- ${attachment.name} ---\n${attachment.bytes.toString('utf8')}` });
+      }
+    }
+    return { role: 'user', content } as unknown as Anthropic.MessageParam;
+  });
   // Keep the prefix byte-stable throughout this tool loop. Workspace/memory
   // tools return their changes in-band, so rebuilding the system prompt here
   // would only invalidate Anthropic's prompt cache.

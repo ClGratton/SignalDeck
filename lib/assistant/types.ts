@@ -16,9 +16,22 @@ export type AssistantMode = 'ask' | 'agent';
  *  - auto: fully autonomous, never pause. */
 export type ApprovalLevel = 'all' | 'critical' | 'auto';
 
+export type AttachmentKind = 'image' | 'pdf' | 'text' | 'document' | 'spreadsheet';
+
+/** Client-safe reference to bytes held in the session-gated server store. */
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: AttachmentKind;
+}
+
 export interface ChatTurn {
   role: 'user' | 'assistant';
   content: string;
+  /** User turns only. The provider adapter resolves these opaque ids to bytes. */
+  attachments?: ChatAttachment[];
 }
 
 /** A proposed action awaiting the operator's explicit confirmation. The server
@@ -168,6 +181,8 @@ export interface ModelOption {
   reasoningEfforts?: ReasoningEffort[];
   /** The provider default represented explicitly in the picker. */
   reasoningDefault?: ReasoningEffort | null;
+  /** Binary/text attachment families verified for this provider path. */
+  attachmentKinds?: AttachmentKind[];
 }
 
 export interface ModelsResponse {

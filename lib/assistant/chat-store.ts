@@ -26,6 +26,9 @@ export interface StoredChatRecord {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** Monotonic server-task revision. A stale browser may have a later wall-clock
+   * timestamp, but it may never overwrite a transcript with a newer revision. */
+  serverVersion?: number;
   /** Opaque to the server: the client's discriminated-union transcript items. */
   items: unknown[];
 }
@@ -89,6 +92,10 @@ function coerce(raw: unknown): ChatCollection {
       title: typeof rec.title === 'string' ? rec.title.slice(0, 80) : '',
       createdAt: typeof rec.createdAt === 'number' ? rec.createdAt : now,
       updatedAt: typeof rec.updatedAt === 'number' ? rec.updatedAt : now,
+      serverVersion:
+        typeof rec.serverVersion === 'number' && Number.isSafeInteger(rec.serverVersion)
+          ? Math.max(0, rec.serverVersion)
+          : 0,
       items: Array.isArray(rec.items) ? rec.items.slice(-MAX_ITEMS_PER_CHAT) : [],
     });
   }
@@ -115,11 +122,22 @@ export function readChats(): ChatCollection {
 
 export function writeChats(input: unknown): { ok: boolean; detail: string } {
   const coll = coerce(input);
+  const prior = readChats();
+  // Collection PUTs are merge operations. Browsers can hold old collections
+  // while another device or a detached task creates/advances a chat, so omission
+  // must not mean deletion and a lower serverVersion must never win.
+  for (const keep of prior.chats) {
+    const idx = coll.chats.findIndex((chat) => chat.id === keep.id);
+    if (idx < 0) {
+      coll.chats.push(keep);
+    } else if ((coll.chats[idx].serverVersion ?? 0) < (keep.serverVersion ?? 0)) {
+      coll.chats[idx] = keep;
+    }
+  }
   // Preserve any task-owned chat from the current store: the live turn the task
   // is writing wins over whatever the client just PUT (which may be stale).
   const owned = new Set(liveTaskChatIds());
   if (owned.size > 0) {
-    const prior = cached ?? readChats();
     for (const id of owned) {
       const keep = prior.chats.find((c) => c.id === id);
       if (!keep) continue;
@@ -129,6 +147,8 @@ export function writeChats(input: unknown): { ok: boolean; detail: string } {
     }
     coll.chats.sort((a, b) => b.updatedAt - a.updatedAt);
   }
+  coll.chats.sort((a, b) => b.updatedAt - a.updatedAt);
+  coll.chats = coll.chats.slice(0, MAX_CHATS);
   return persistCollection(coll);
 }
 
@@ -152,8 +172,23 @@ function persistCollection(coll: ChatCollection): { ok: boolean; detail: string 
  *  owns). Replaces/inserts just that chat and BYPASSES the live-task guard — the
  *  task is the legitimate owner here, so its in-progress write must land. */
 export function writeTaskChat(rec: StoredChatRecord): { ok: boolean; detail: string } {
-  const prior = cached ?? readChats();
+  const prior = readChats();
+  const previous = prior.chats.find((c) => c.id === rec.id);
+  const versioned = {
+    ...rec,
+    serverVersion: Math.max(rec.serverVersion ?? 0, previous?.serverVersion ?? 0) + 1,
+  };
   const others = prior.chats.filter((c) => c.id !== rec.id);
-  const coll = coerce({ activeId: prior.activeId, chats: [rec, ...others] });
+  const coll = coerce({ activeId: prior.activeId, chats: [versioned, ...others] });
   return persistCollection(coll);
+}
+
+export function deleteChat(id: string): { ok: boolean; detail: string } {
+  if (liveTaskChatIds().includes(id)) {
+    return { ok: false, detail: 'Stop the live task before deleting this chat.' };
+  }
+  const prior = readChats();
+  const chats = prior.chats.filter((chat) => chat.id !== id);
+  const activeId = prior.activeId === id ? (chats[0]?.id ?? null) : prior.activeId;
+  return persistCollection({ activeId, chats });
 }

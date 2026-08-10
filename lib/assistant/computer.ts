@@ -212,7 +212,11 @@ export class PublicBrowserComputer {
     this.browser = await chromium.launch({
       executablePath,
       headless: true,
-      chromiumSandbox: true,
+      // The production app already runs as an unprivileged user inside its own
+      // container. Debian's system Chromium has no usable setuid/user-namespace
+      // sandbox in that environment; forcing it on makes Chromium exit before
+      // a page is created. Let Playwright apply its container launch mode.
+      chromiumSandbox: false,
       env: {},
       args: ['--disable-extensions', '--disable-file-system', '--disable-dev-shm-usage'],
     });

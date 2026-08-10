@@ -41,6 +41,7 @@ import type {
   AssistantEvent,
   AssistantMode,
   AssistantProvider,
+  ChatAttachment,
   ChatTurn,
   ReasoningEffort,
   StreamFrame,
@@ -84,6 +85,7 @@ interface TaskRecord {
   turns: ChatTurn[];
   /** Raw user message for the projected `user` item written to the chat store. */
   userText: string;
+  userAttachments?: ChatAttachment[];
   /** Chat items that existed BEFORE this turn (captured from the store at start). */
   priorItems: unknown[];
   title: string;
@@ -258,7 +260,10 @@ function mergeConsecutive(turns: ChatTurn[]): ChatTurn[] {
   const out: ChatTurn[] = [];
   for (const t of turns) {
     const lastT = out[out.length - 1];
-    if (lastT && lastT.role === t.role) lastT.content += '\n' + t.content;
+    if (lastT && lastT.role === t.role) {
+      lastT.content += '\n' + t.content;
+      if (t.attachments?.length) lastT.attachments = [...(lastT.attachments ?? []), ...t.attachments];
+    }
     else out.push({ ...t });
   }
   return out;
@@ -299,12 +304,12 @@ function turnsFromItems(items: ProjItem[]): ChatTurn[] {
 function writeTurn(task: LiveTask): void {
   const items = [
     ...task.priorItems,
-    { kind: 'user', text: task.userText },
+    { kind: 'user', text: task.userText, ...(task.userAttachments?.length ? { attachments: task.userAttachments } : {}) },
     ...task.items,
   ];
   const rec: StoredChatRecord = {
     id: task.chatId,
-    title: task.title || task.userText.slice(0, 60) || 'New chat',
+    title: task.title || task.userText.slice(0, 60) || task.userAttachments?.[0]?.name || 'New chat',
     createdAt: task.createdAt,
     updatedAt: Date.now(),
     items,
@@ -359,6 +364,55 @@ function makeCtx(task: LiveTask): ToolContext {
   };
 }
 
+function transientProviderError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth++) {
+    const record = current as { message?: unknown; code?: unknown; cause?: unknown };
+    const message = typeof record.message === 'string' ? record.message.toLowerCase() : '';
+    const code = typeof record.code === 'string' ? record.code.toUpperCase() : '';
+    if (
+      message.includes('fetch failed') || message.includes('network') || message.includes('socket') ||
+      ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)
+    ) return true;
+    current = record.cause;
+  }
+  return false;
+}
+
+function providerErrorMeta(error: unknown): { message: string; code?: string; cause?: string } {
+  const record = error && typeof error === 'object'
+    ? error as { message?: unknown; code?: unknown; cause?: unknown }
+    : {};
+  const cause = record.cause && typeof record.cause === 'object'
+    ? record.cause as { message?: unknown; code?: unknown }
+    : {};
+  const code = typeof cause.code === 'string'
+    ? cause.code
+    : (typeof record.code === 'string' ? record.code : undefined);
+  const causeMessage = typeof cause.message === 'string' ? cause.message.slice(0, 240) : undefined;
+  return {
+    message: typeof record.message === 'string' ? record.message.slice(0, 240) : String(error).slice(0, 240),
+    ...(code ? { code } : {}),
+    ...(causeMessage ? { cause: causeMessage } : {}),
+  };
+}
+
+function retryDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const finish = () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      finish();
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /** Run one segment of the turn (initial or post-timer resume). Not awaited by
  *  the caller — it owns the task's progression to sleep / done / error. */
 async function drive(task: LiveTask, turns: ChatTurn[]): Promise<void> {
@@ -369,12 +423,32 @@ async function drive(task: LiveTask, turns: ChatTurn[]): Promise<void> {
   task.activeTimerId = undefined;
   task.activeTimerLabel = undefined;
   const ctx = makeCtx(task);
-  try {
-    await runProvider(task, turns, ctx);
-  } catch (err) {
-    if (!task.abort.signal.aborted) {
-      console.error('[assistant] task failed:', (err as Error)?.message ?? err);
-      emit(task, { type: 'error', message: 'The assistant request failed. Try again.' });
+  const retryBackoff = [2_000, 5_000, 15_000];
+  for (let attempt = 0; ; attempt++) {
+    const seqBefore = task.seq;
+    try {
+      await runProvider(task, turns, ctx);
+      break;
+    } catch (err) {
+      const canRetry =
+        !task.abort.signal.aborted &&
+        task.seq === seqBefore &&
+        transientProviderError(err) &&
+        attempt < retryBackoff.length;
+      if (canRetry) {
+        console.warn('[assistant] transient provider connection failure; retrying', {
+          attempt: attempt + 1,
+          delayMs: retryBackoff[attempt],
+          ...providerErrorMeta(err),
+        });
+        await retryDelay(retryBackoff[attempt], task.abort.signal);
+        continue;
+      }
+      if (!task.abort.signal.aborted) {
+        console.error('[assistant] task failed after provider retries', providerErrorMeta(err));
+        emit(task, { type: 'error', message: 'The assistant request failed after retrying the connection.' });
+      }
+      break;
     }
   }
 
@@ -454,6 +528,7 @@ export interface StartTaskOpts {
   approval: ApprovalLevel;
   turns: ChatTurn[];
   userText: string;
+  userAttachments?: ChatAttachment[];
 }
 
 /** Start a new turn for a chat. Refuses if one is already live (the composer is
@@ -479,8 +554,9 @@ export function startTask(opts: StartTaskOpts): { ok: true; task: LiveTask } | {
     approval: opts.approval,
     turns: opts.turns,
     userText: opts.userText,
+    userAttachments: opts.userAttachments,
     priorItems,
-    title: stored?.title || opts.userText.slice(0, 60),
+    title: stored?.title || opts.userText.slice(0, 60) || opts.userAttachments?.[0]?.name || 'New chat',
     log: [],
     seq: 0,
     items: [],
@@ -676,6 +752,7 @@ interface PersistedTask {
   approval: ApprovalLevel;
   turns: ChatTurn[];
   userText: string;
+  userAttachments?: ChatAttachment[];
   priorItems: unknown[];
   title: string;
   items: ProjItem[];
@@ -705,6 +782,7 @@ function persist(): void {
         approval: t.approval,
         turns: t.turns,
         userText: t.userText,
+        userAttachments: t.userAttachments,
         priorItems: t.priorItems,
         title: t.title,
         items: t.items,
@@ -747,6 +825,7 @@ function loadOnce(): void {
       approval: p.approval,
       turns: Array.isArray(p.turns) ? p.turns : [],
       userText: typeof p.userText === 'string' ? p.userText : '',
+      userAttachments: Array.isArray(p.userAttachments) ? p.userAttachments : undefined,
       priorItems: Array.isArray(p.priorItems) ? p.priorItems : [],
       title: p.title ?? '',
       log: [],

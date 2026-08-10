@@ -1,7 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { hasValidSession } from '@/lib/session';
 import { getProviderKey, providerDef, PROVIDERS } from '@/lib/assistant/keys';
-import { defaultModel, isKnownModel, resolveReasoningEffort } from '@/lib/assistant/models';
+import {
+  attachmentKindsFor,
+  defaultModel,
+  isKnownModel,
+  resolveReasoningEffort,
+} from '@/lib/assistant/models';
+import { enforceAttachmentRequestLimits, resolveAttachmentRefs } from '@/lib/assistant/attachments';
 import { startTask, streamFrames, streamHeaders } from '@/lib/assistant/tasks';
 import type {
   ApprovalLevel,
@@ -66,13 +72,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'chatId is required.' }, { status: 400 });
   }
 
-  const turns: ChatTurn[] = (Array.isArray(body.messages) ? body.messages : [])
+  let turns: ChatTurn[];
+  try {
+    turns = (Array.isArray(body.messages) ? body.messages : [])
     .filter(
       (t): t is ChatTurn =>
         !!t && (t.role === 'user' || t.role === 'assistant') && typeof t.content === 'string',
     )
     .slice(-MAX_TURNS)
-    .map((t) => ({ role: t.role, content: t.content.slice(0, MAX_TURN_CHARS) }));
+      .map((t) => ({
+        role: t.role,
+        content: t.content.slice(0, MAX_TURN_CHARS),
+        ...(t.role === 'user'
+          ? { attachments: resolveAttachmentRefs(t.attachments, attachmentKindsFor(provider, model)) }
+          : {}),
+      }));
+    enforceAttachmentRequestLimits(turns);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid attachment.' },
+      { status: 400 },
+    );
+  }
   if (turns.length === 0 || turns[turns.length - 1].role !== 'user') {
     return NextResponse.json({ error: 'last message must be from the user' }, { status: 400 });
   }
@@ -90,6 +111,7 @@ export async function POST(req: NextRequest) {
     approval,
     turns,
     userText,
+    userAttachments: turns[turns.length - 1].attachments,
   });
   if (!started.ok) {
     // A task for this chat is already in flight — the client should reattach.

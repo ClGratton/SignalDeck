@@ -9,10 +9,12 @@ import 'server-only';
 import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
 import { maxAgentSteps } from '@/lib/assistant/config';
+import { readAttachment } from '@/lib/assistant/attachments';
 import type { ChatTurn } from '@/lib/assistant/types';
 
 interface GeminiPart {
   text?: string;
+  inlineData?: { mimeType: string; data: string };
   thought?: boolean;
   functionCall?: { name: string; args?: Record<string, unknown> };
   functionResponse?: { name: string; response: { result: string } };
@@ -41,10 +43,18 @@ export async function runGeminiTurn(
   const emit = ctx.emit;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
 
-  const contents: GeminiContent[] = turns.map((t) => ({
-    role: t.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: t.content }],
-  }));
+  const contents: GeminiContent[] = turns.map((t) => {
+    const parts: GeminiPart[] = t.content ? [{ text: t.content }] : [];
+    if (t.role === 'user') {
+      for (const ref of t.attachments ?? []) {
+        const attachment = readAttachment(ref.id);
+        parts.push({
+          inlineData: { mimeType: attachment.mimeType, data: attachment.bytes.toString('base64') },
+        });
+      }
+    }
+    return { role: t.role === 'assistant' ? 'model' : 'user', parts };
+  });
   const declarations = (ctx.utility ? [] : listTools()).map((t) => ({
     name: t.name,
     description: t.description,

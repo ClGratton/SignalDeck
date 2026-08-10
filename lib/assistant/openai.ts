@@ -23,6 +23,7 @@ import {
   type OpenAiStreamEvent,
 } from '@/lib/assistant/openai-stream';
 import { readSseData } from '@/lib/assistant/sse';
+import { readAttachment } from '@/lib/assistant/attachments';
 import type { AssistantProvider, ChatTurn, ReasoningEffort } from '@/lib/assistant/types';
 
 interface ToolCall {
@@ -92,26 +93,44 @@ function responseInput(turns: ChatTurn[], explicitCache: boolean): ResponseInput
   let breakpoint = -1;
   if (explicitCache) {
     for (let i = turns.length - 1; i >= 0; i--) {
-      if (turns[i].role === 'user') {
+      if (turns[i].role === 'user' && turns[i].content.length > 0) {
         breakpoint = i;
         break;
       }
     }
   }
-  return turns.map((turn, index) =>
-    index === breakpoint
-      ? {
-          role: turn.role,
-          content: [
-            {
+  return turns.map((turn, index) => {
+    if (turn.role !== 'user' || !turn.attachments?.length) {
+      return index === breakpoint
+        ? {
+            role: turn.role,
+            content: [{
               type: 'input_text',
               text: turn.content,
               prompt_cache_breakpoint: { mode: 'explicit' },
-            },
-          ],
-        }
-      : { role: turn.role, content: turn.content },
-  );
+            }],
+          }
+        : { role: turn.role, content: turn.content };
+    }
+    const content: ResponseInputItem[] = [];
+    if (turn.content) {
+      content.push({
+        type: 'input_text',
+        text: turn.content,
+        ...(index === breakpoint ? { prompt_cache_breakpoint: { mode: 'explicit' } } : {}),
+      });
+    }
+    for (const ref of turn.attachments) {
+      const attachment = readAttachment(ref.id);
+      const dataUrl = `data:${attachment.mimeType};base64,${attachment.bytes.toString('base64')}`;
+      content.push(
+        attachment.kind === 'image'
+          ? { type: 'input_image', image_url: dataUrl, detail: 'auto' }
+          : { type: 'input_file', filename: attachment.name, file_data: dataUrl },
+      );
+    }
+    return { role: 'user', content };
+  });
 }
 
 function logResponseUsage(model: string, request: number, usage?: ResponseUsage): void {
@@ -234,7 +253,8 @@ async function runResponsesTurn(
       : []),
     ...(hostedComputer ? [{ type: 'computer' as const }] : []),
   ];
-  const explicitCache = supportsExplicitPromptCache(model);
+  const explicitCache = supportsExplicitPromptCache(model) &&
+    turns.some((turn) => turn.role === 'user' && turn.content.length > 0);
   const input = responseInput(turns, explicitCache);
   const cacheKey = explicitCache ? promptCacheKey(model, ctx.chatId) : undefined;
   // Freeze the prompt for this run. Plan/memory tools can update server state
@@ -445,6 +465,10 @@ async function runChatCompletionsTurn(
   ctx: ToolContext,
 ): Promise<void> {
   const emit = ctx.emit;
+  if (turns.some((turn) => turn.attachments?.length)) {
+    emit({ type: 'error', message: `${provider} does not support attachments on this API path.` });
+    return;
+  }
   const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
   const tools = (ctx.utility ? [] : listTools()).map((t) => ({
     type: 'function' as const,

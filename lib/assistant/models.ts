@@ -15,7 +15,12 @@ import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeFileAtomic } from '@/lib/atomic-write';
-import type { AssistantProvider, ModelOption, ReasoningEffort } from '@/lib/assistant/types';
+import type {
+  AssistantProvider,
+  AttachmentKind,
+  ModelOption,
+  ReasoningEffort,
+} from '@/lib/assistant/types';
 import { getProviderKey, getProviderBaseUrl, providerDef, PROVIDERS } from '@/lib/assistant/keys';
 import { cfg } from '@/lib/service-config';
 
@@ -130,6 +135,22 @@ export function supportsOpenAiHostedWebSearch(model: string): boolean {
  * the Responses request may ask for computer actions. */
 export function supportsOpenAiComputerUse(model: string): boolean {
   return isGpt56(model);
+}
+
+/** Provider paths advertise only formats they actually translate. OpenAI file
+ * inputs are limited to the official Responses API; compatible chat endpoints
+ * must not inherit capabilities merely because their model id resembles GPT. */
+export function attachmentKindsFor(
+  provider: AssistantProvider,
+  _model: string,
+): AttachmentKind[] {
+  if (provider === 'openai' && usesOfficialOpenAiApi(provider)) {
+    return ['image', 'pdf', 'text', 'document', 'spreadsheet'];
+  }
+  if (provider === 'anthropic' || provider === 'gemini') {
+    return ['image', 'pdf', 'text'];
+  }
+  return [];
 }
 
 /** The verified effort contract for the current OpenAI GPT-5.6 family. */
@@ -609,6 +630,7 @@ export async function modelOptions(provider: AssistantProvider): Promise<ModelOp
       ...(reasoningEfforts.length > 0
         ? { reasoningEfforts, reasoningDefault: 'medium' as const }
         : {}),
+      attachmentKinds: attachmentKindsFor(provider, m.id),
     };
   });
 }

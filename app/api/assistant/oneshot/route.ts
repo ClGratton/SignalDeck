@@ -4,7 +4,13 @@ import { runAnthropicTurn } from '@/lib/assistant/anthropic';
 import { runGeminiTurn } from '@/lib/assistant/gemini';
 import { runOpenAiTurn } from '@/lib/assistant/openai';
 import { getProviderKey, getProviderBaseUrl, providerDef, PROVIDERS } from '@/lib/assistant/keys';
-import { defaultModel, isKnownModel, resolveReasoningEffort } from '@/lib/assistant/models';
+import {
+  attachmentKindsFor,
+  defaultModel,
+  isKnownModel,
+  resolveReasoningEffort,
+} from '@/lib/assistant/models';
+import { enforceAttachmentRequestLimits, resolveAttachmentRefs } from '@/lib/assistant/attachments';
 import { awaitDecision } from '@/lib/assistant/decisions';
 import { streamHeaders } from '@/lib/assistant/tasks';
 import type { ToolContext } from '@/lib/assistant/tools';
@@ -56,13 +62,28 @@ export async function POST(req: NextRequest) {
       : defaultModel(provider);
   const reasoningEffort = resolveReasoningEffort(provider, model, body.reasoningEffort);
 
-  const turns: ChatTurn[] = (Array.isArray(body.messages) ? body.messages : [])
+  let turns: ChatTurn[];
+  try {
+    turns = (Array.isArray(body.messages) ? body.messages : [])
     .filter(
       (t): t is ChatTurn =>
         !!t && (t.role === 'user' || t.role === 'assistant') && typeof t.content === 'string',
     )
     .slice(-MAX_TURNS)
-    .map((t) => ({ role: t.role, content: t.content.slice(0, MAX_TURN_CHARS) }));
+      .map((t) => ({
+        role: t.role,
+        content: t.content.slice(0, MAX_TURN_CHARS),
+        ...(t.role === 'user'
+          ? { attachments: resolveAttachmentRefs(t.attachments, attachmentKindsFor(provider, model)) }
+          : {}),
+      }));
+    enforceAttachmentRequestLimits(turns);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid attachment.' },
+      { status: 400 },
+    );
+  }
   if (turns.length === 0 || turns[turns.length - 1].role !== 'user') {
     return NextResponse.json({ error: 'last message must be from the user' }, { status: 400 });
   }

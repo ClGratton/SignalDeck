@@ -22,7 +22,9 @@
 .browserPane {
   position: fixed;
   z-index: calc(var(--z-header) + 1);
-  top: var(--pad-y);
+  /* The operator panel lives below the console header. Match that same frame
+     instead of starting at the page edge, so both top and bottom align. */
+  top: calc(var(--pad-y) + 3.4rem);
   right: calc(var(--pad-x) + 360px + var(--space-sm));
   width: min(760px, calc(100vw - 360px - 2 * var(--pad-x) - 2 * var(--space-sm)));
   height: calc(100svh - 2 * var(--pad-y) - 3.4rem);
@@ -461,6 +463,40 @@
   border-radius: var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.sentAttachments {
+  width: min(18rem, 100%);
+  display: grid;
+  gap: 0.35rem;
+}
+.sentAttachment {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.5rem;
+  color: var(--ink-strong);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+.sentAttachment:hover {
+  border-color: var(--accent);
+}
+.sentAttachment span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sentAttachmentImage {
+  width: 2.4rem;
+  height: 2.4rem;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
 }
 /* Hover footer under an operator message: time on the left, copy + rewind on the
    right, icon-only. Hidden until hover/focus so it stays quiet (touch: dimmed). */
@@ -1661,6 +1697,112 @@
   align-items: flex-end;
   gap: 0.45rem;
   padding: 0.5rem 0.65rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+.composer[data-dragging] {
+  border-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+}
+
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.attachBtn {
+  display: grid;
+  place-items: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  flex: 0 0 auto;
+  padding: 0;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.attachBtn:hover:not(:disabled),
+.attachBtn:focus-visible {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.attachBtn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.attachBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.attachmentTray {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.5rem 0.65rem 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.attachmentChip {
+  min-width: 0;
+  max-width: 13rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  padding: 0.25rem 0.3rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-xs);
+}
+.attachmentThumb {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: 0.2rem;
+}
+.attachmentName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachmentRemove {
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.attachmentRemove:hover,
+.attachmentRemove:focus-visible {
+  color: var(--down-ink);
+  background: color-mix(in oklch, var(--down) 10%, transparent);
+}
+.attachmentProgress {
+  align-self: center;
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.attachmentError {
+  margin: 0;
+  padding: 0.35rem 0.65rem 0;
+  color: var(--down-ink);
+  font-size: var(--text-xs);
 }
 
 .input {
