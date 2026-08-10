@@ -404,8 +404,12 @@ export function AssistantSidebar({
   const contextNotes = useRef<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Aborts the in-flight turn when the operator hits Stop.
+  // Controller for the ACTIVE chat's stream subscription. Switching chats
+  // aborts only this subscription; the server-side task keeps running.
   const abortRef = useRef<AbortController | null>(null);
+  // A stream abort caused by switching chats is a detach, not a request to stop
+  // the task. Keep the distinction explicit across async fetch/stream cleanup.
+  const detachingSignalsRef = useRef<WeakSet<AbortSignal>>(new WeakSet());
   // Server-side agent tasks: the turn now runs on the SERVER, decoupled from any
   // open request, so it survives a reload/logout and re-runs timers on its own.
   // The client just attaches to (and reattaches to) the task's event stream.
@@ -860,10 +864,19 @@ export function AssistantSidebar({
 
   // ── Chats ───────────────────────────────────────────────────────────────
 
+  const detachActiveStream = useCallback((chatId: string | null) => {
+    const controller = abortRef.current;
+    if (chatId && controller) detachingSignalsRef.current.add(controller.signal);
+    controller?.abort();
+    if (abortRef.current === controller) abortRef.current = null;
+    setBusy(false);
+  }, []);
+
   const newChat = () => {
-    if (busy) return;
+    detachActiveStream(activeIdRef.current);
     flush(items);
     activeIdRef.current = null;
+    writeChats();
     setItems([]);
     setWorkspace(null);
     setView('chat');
@@ -877,12 +890,19 @@ export function AssistantSidebar({
   };
 
   const selectChat = (id: string) => {
-    if (busy) return;
-    flush(items);
+    if (id === activeIdRef.current) {
+      setView('chat');
+      scrollToBottom();
+      return;
+    }
     const chat = chatsRef.current.find((c) => c.id === id);
     if (!chat) return;
+    detachActiveStream(activeIdRef.current);
+    flush(items);
     activeIdRef.current = chat.id;
+    writeChats();
     setItems(chat.items);
+    setBusy(serverOwnedRef.current.has(chat.id));
     loadWorkspace(chat.id);
     setView('chat');
     scrollToBottom(); // open to the latest message, not the top
@@ -892,8 +912,10 @@ export function AssistantSidebar({
   };
 
   const deleteChat = (id: string) => {
+    if (serverOwnedRef.current.has(id)) return;
     chatsRef.current = chatsRef.current.filter((c) => c.id !== id);
     if (activeIdRef.current === id) {
+      detachActiveStream(id);
       activeIdRef.current = null;
       setItems([]);
     }
@@ -1193,6 +1215,7 @@ export function AssistantSidebar({
     | { reason: 'done' }
     | { reason: 'error' }
     | { reason: 'sleep'; until: number }
+    | { reason: 'detached' }
     | { reason: 'closed' };
 
   // Read frames off a task stream, applying each event and tracking the last seq
@@ -1220,6 +1243,17 @@ export function AssistantSidebar({
             frame = JSON.parse(line) as StreamFrame;
           } catch {
             continue;
+          }
+          // A chat switch can race one buffered frame. Do not let that frame
+          // mutate the newly active transcript or advance beyond an event the
+          // UI never applied.
+          if (activeIdRef.current !== chatId) {
+            try {
+              await reader.cancel();
+            } catch {
+              /* already closed */
+            }
+            return { reason: 'detached' };
           }
           if (typeof frame?.seq === 'number') lastSeqRef.current.set(chatId, frame.seq);
           const ev = frame?.event;
@@ -1287,12 +1321,15 @@ export function AssistantSidebar({
   const finishTurn = useCallback(
     (chatId: string, opts?: { reload?: boolean }) => {
       unmarkServerOwned(chatId);
-      if (activeIdRef.current === chatId) {
+      const isActive = activeIdRef.current === chatId;
+      if (isActive) {
         setBusy(false);
         abortRef.current = null;
         requestAnimationFrame(() => inputRef.current?.focus());
       }
-      if (opts?.reload) void reloadChatFromServer(chatId);
+      // An inactive chat did not apply its live frames, so always refresh it
+      // from server truth when its background task finishes.
+      if (opts?.reload || !isActive) void reloadChatFromServer(chatId);
     },
     [reloadChatFromServer, unmarkServerOwned],
   );
@@ -1345,6 +1382,9 @@ export function AssistantSidebar({
           finishTurn(chatId);
           return;
         }
+        if (result.reason === 'detached') {
+          return;
+        }
         if (result.reason === 'sleep') {
           // Waiting on the server's timer — release the busy spinner; the timer
           // widget (or a reload) reattaches at wake. Chat stays server-owned.
@@ -1357,6 +1397,7 @@ export function AssistantSidebar({
         // swapping it for the server copy re-rendered it and jerked the scroll up
         // to the operator's last message ("Stop shouldn't move the chat").
         if (signal?.aborted) {
+          if (detachingSignalsRef.current.has(signal)) return;
           finishTurn(chatId);
           return;
         }
@@ -1401,6 +1442,7 @@ export function AssistantSidebar({
       abortRef.current = controller;
       const reader = await openReattach(chatId, controller.signal);
       if (!reader) {
+        if (controller.signal.aborted && detachingSignalsRef.current.has(controller.signal)) return;
         // No live task — it finished while we were away; show the stored result.
         finishTurn(chatId, { reload: true });
         return;
@@ -1503,6 +1545,7 @@ export function AssistantSidebar({
         await streamLoop(chatId, res.body.getReader(), controller.signal);
       } catch (err) {
         if ((err as Error)?.name === 'AbortError') {
+          if (detachingSignalsRef.current.has(controller.signal)) return;
           // Stop pressed: the server task is told to stop in stop(); settle here.
           finishTurn(chatId, { reload: true });
         } else {
@@ -1556,6 +1599,9 @@ export function AssistantSidebar({
         await armServerTimer(cur);
         return;
       }
+      // A detached task may have finished before this chat was reopened. Pull
+      // its server-owned transcript before declaring the chat idle.
+      await reloadChatFromServer(active);
       // No live task for the active chat. The server is authoritative, so settle
       // any stale 'running' timer item (left over from a turn that was sleeping
       // when the transcript was persisted) and clear busy — otherwise the
@@ -1570,7 +1616,7 @@ export function AssistantSidebar({
     } catch {
       /* offline — the stored transcript stands */
     }
-  }, [reattachResume, markServerOwned, unmarkServerOwned, armServerTimer]);
+  }, [reattachResume, markServerOwned, unmarkServerOwned, armServerTimer, reloadChatFromServer]);
 
   // Self-healing reconcile: WHILE the composer is locked (busy spinner or a timer
   // wait), poll the server's authoritative task status so the lock can't get
@@ -1645,6 +1691,7 @@ export function AssistantSidebar({
         for (const id of [...serverOwnedRef.current]) {
           if (liveIds.has(id)) continue;
           unmarkServerOwned(id);
+          void reloadChatFromServer(id);
           // The now-finished task was the chat on screen — settle its lock so the
           // composer isn't stuck "working" and a stale running timer is closed.
           if (activeIdRef.current === id) {
@@ -1669,7 +1716,7 @@ export function AssistantSidebar({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [liveChats.length, unmarkServerOwned]);
+  }, [liveChats.length, unmarkServerOwned, reloadChatFromServer]);
 
   // Once chats are loaded, reattach the active chat's live task exactly once (a
   // reload landing back on a running/sleeping turn picks it up automatically).
@@ -1881,7 +1928,6 @@ export function AssistantSidebar({
             type="button"
             className={styles.iconBtn}
             onClick={newChat}
-            disabled={busy}
             aria-label="New chat"
             title="New chat"
           >
@@ -1940,7 +1986,6 @@ export function AssistantSidebar({
                   type="button"
                   className={styles.chatPick}
                   onClick={() => selectChat(c.id)}
-                  disabled={busy}
                 >
                   <span className={styles.chatTitle}>{c.title || 'New chat'}</span>
                   {liveChats.includes(c.id) ? (
@@ -1957,7 +2002,9 @@ export function AssistantSidebar({
                   type="button"
                   className={styles.iconBtn}
                   onClick={() => deleteChat(c.id)}
+                  disabled={liveChats.includes(c.id)}
                   aria-label={`Delete chat "${c.title || 'New chat'}"`}
+                  title={liveChats.includes(c.id) ? 'Stop this task before deleting its chat' : 'Delete chat'}
                 >
                   <Trash2 size={14} strokeWidth={2.2} aria-hidden />
                 </button>
