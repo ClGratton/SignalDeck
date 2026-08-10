@@ -117,6 +117,21 @@ function isGpt56(model: string): boolean {
   return /^gpt-5\.6(?:$|-)/i.test(model);
 }
 
+/** Hosted Responses API tools are not reported by `/models`, so keep this
+ * allow-list tied to families whose current OpenAI model pages explicitly
+ * document the capability. Unknown and older models stay on our own tool
+ * implementations instead of receiving an API tool they may reject. */
+export function supportsOpenAiHostedWebSearch(model: string): boolean {
+  return isGpt56(model);
+}
+
+/** GPT-5.6's model pages also document the GA built-in computer tool. The
+ * actual browser remains app-owned and isolated; this only controls whether
+ * the Responses request may ask for computer actions. */
+export function supportsOpenAiComputerUse(model: string): boolean {
+  return isGpt56(model);
+}
+
 /** The verified effort contract for the current OpenAI GPT-5.6 family. */
 export function reasoningEffortsFor(
   provider: AssistantProvider,

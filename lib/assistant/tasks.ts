@@ -136,6 +136,19 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…' : s
 function emit(task: LiveTask, event: AssistantEvent): void {
   if (event.type === 'error') task.sawError = true;
   const frame: StreamFrame = { seq: ++task.seq, event };
+  // Browser screenshots are live UI state, not transcript/history. Persisting a
+  // base64 PNG on every computer step would balloon both chat and task stores;
+  // a reconnect fetches the current frame from the privileged browser route.
+  if (event.type === 'browser') {
+    for (const sub of task.subscribers) {
+      try {
+        sub(frame);
+      } catch {
+        /* a dead subscriber; the stream's cancel() removes it */
+      }
+    }
+    return;
+  }
   task.log.push(frame);
   if (task.log.length > MAX_LOG) task.log.splice(0, task.log.length - MAX_LOG);
   project(task, event);

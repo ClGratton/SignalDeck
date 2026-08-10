@@ -48,9 +48,14 @@
   border-radius: var(--radius-xs);
 }
 
+.codeBlock {
+  position: relative;
+  min-width: 0;
+}
+
 .pre {
   margin: 0;
-  padding: 0.6rem 0.7rem;
+  padding: 0.65rem 2.45rem 0.65rem 0.7rem;
   overflow-x: auto;
   background: var(--bg);
   border: 1px solid var(--border-strong);
@@ -61,6 +66,45 @@
   font-size: var(--text-xs);
   color: var(--ink-strong);
   white-space: pre;
+}
+
+.copyCode {
+  position: absolute;
+  z-index: 1;
+  top: 0.38rem;
+  right: 0.4rem;
+  width: 1.7rem;
+  height: 1.7rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease;
+}
+.copyCode:hover {
+  color: var(--ink-strong);
+  background: color-mix(in oklch, var(--surface-2) 70%, var(--ink) 10%);
+}
+.copyCode:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.copyCode:active {
+  background: var(--surface-2);
+}
+.copyCode[data-copied] {
+  color: var(--ok);
+  border-color: color-mix(in oklch, var(--ok) 55%, var(--border-strong));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .copyCode {
+    transition: none;
+  }
 }
 
 .quote {

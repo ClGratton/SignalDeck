@@ -41,6 +41,9 @@ export type AssistantEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'tool'; name: string; label: string }
+  /** Ephemeral screenshot of the shared server-side visual browser. Cookie and
+   * storage values never cross this boundary. */
+  | { type: 'browser'; imageUrl: string; url: string; title: string }
   /** Ask mode: an out-of-band proposal card (confirmed later via /execute). */
   | { type: 'proposal'; proposal: ProposalCard }
   /** Agent mode: an action awaiting an inline Run/Skip decision (/decide). */

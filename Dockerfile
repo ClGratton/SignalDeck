@@ -24,6 +24,14 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+
+# OpenAI computer-use runs in a disposable, headless Chromium context. Install
+# only the system browser (playwright-core supplies the driver); no browser
+# profile or credentials are baked into the image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium ca-certificates fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
 # Next's standalone bundle (server.js + traced node_modules), static assets,
 # and the public dir. /app/data is the persistent runtime state (see compose).

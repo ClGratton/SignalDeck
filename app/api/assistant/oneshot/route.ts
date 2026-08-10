@@ -84,6 +84,7 @@ export async function POST(req: NextRequest) {
       const ctx: ToolContext = {
         mode: 'ask',
         approval: 'all',
+        utility: true,
         emit,
         awaitDecision,
         signal: abort.signal,

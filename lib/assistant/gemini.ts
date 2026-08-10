@@ -45,15 +45,12 @@ export async function runGeminiTurn(
     role: t.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: t.content }],
   }));
-  const tools = [
-    {
-      functionDeclarations: listTools().map((t) => ({
-        name: t.name,
-        description: t.description,
-        parameters: t.input_schema,
-      })),
-    },
-  ];
+  const declarations = (ctx.utility ? [] : listTools()).map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.input_schema,
+  }));
+  const tools = declarations.length > 0 ? [{ functionDeclarations: declarations }] : undefined;
   // Gemini 2.5+ applies implicit prefix caching automatically. Keeping this
   // fixed during the loop gives that native cache a stable system prefix;
   // older models simply ignore the optimization without receiving new fields.

@@ -7,8 +7,61 @@
 // dangerouslySetInnerHTML), and link hrefs are restricted to http(s)/relative,
 // so model output can't inject markup or scripts.
 
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Check, Copy } from 'lucide-react';
 import styles from './markdown.module.css';
+
+function legacyCopy(text: string): boolean {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  return copied;
+}
+
+function CopyCodeButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+  }, []);
+
+  const copy = async () => {
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } else {
+        ok = legacyCopy(text);
+      }
+    } catch {
+      ok = legacyCopy(text);
+    }
+    if (!ok) return;
+    setCopied(true);
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopied(false), 1_800);
+  };
+
+  return (
+    <button
+      type="button"
+      className={styles.copyCode}
+      onClick={copy}
+      aria-label={copied ? 'Copied code' : 'Copy code'}
+      title={copied ? 'Copied' : 'Copy code'}
+      data-copied={copied || undefined}
+    >
+      {copied ? <Check size={13} aria-hidden /> : <Copy size={13} aria-hidden />}
+    </button>
+  );
+}
 
 // ── Inline (bold, italic, code, links) ───────────────────────────────────────
 
@@ -83,10 +136,14 @@ export function Markdown({ text }: { text: string }) {
       i++;
       while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]);
       i++; // closing fence
+      const code = body.join('\n');
       blocks.push(
-        <pre key={key++} className={styles.pre}>
-          <code>{body.join('\n')}</code>
-        </pre>,
+        <div key={key++} className={styles.codeBlock}>
+          <CopyCodeButton text={code} />
+          <pre className={styles.pre}>
+            <code>{code}</code>
+          </pre>
+        </div>,
       );
       continue;
     }

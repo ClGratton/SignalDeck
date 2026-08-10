@@ -75,6 +75,9 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Active chat id — scopes the per-chat workspace (notes + plan) tools. */
   chatId?: string;
+  /** True for request-scoped text utilities such as /compact. Utility calls
+   *  must not receive action, web, memory, or browser tools. */
+  utility?: boolean;
   /** Set by start_timer to END the turn and hand the wait to the SERVER-side
    *  task runner, which re-invokes the agent when it elapses (so the countdown
    *  survives a reload/logout). The provider loops return as soon as this is set;
@@ -375,8 +378,8 @@ const ACTION_TOOLS: ToolDef[] = [
 // they're only listed when a search backend is configured, since without a key
 // they can't do anything (and the model shouldn't be told it has internet when
 // it doesn't).
-export function listTools(): ToolDef[] {
-  const web = hasWebSearch() ? WEB_TOOLS : [];
+export function listTools({ includeWeb = true }: { includeWeb?: boolean } = {}): ToolDef[] {
+  const web = includeWeb && hasWebSearch() ? WEB_TOOLS : [];
   return [...READ_TOOLS, ...web, ...ACTION_TOOLS];
 }
 

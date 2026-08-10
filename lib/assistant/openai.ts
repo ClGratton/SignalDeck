@@ -11,6 +11,14 @@ import { systemPrompt } from '@/lib/assistant/prompt';
 import { listTools, executeTool, toolLabel, type ToolContext } from '@/lib/assistant/tools';
 import { maxAgentSteps } from '@/lib/assistant/config';
 import {
+  supportsOpenAiComputerUse,
+  supportsOpenAiHostedWebSearch,
+} from '@/lib/assistant/models';
+import {
+  getPublicBrowserComputer,
+  type ComputerAction,
+} from '@/lib/assistant/computer';
+import {
   readOpenAiResponseStream,
   type OpenAiStreamEvent,
 } from '@/lib/assistant/openai-stream';
@@ -39,6 +47,12 @@ interface ResponseFunctionCall extends ResponseInputItem {
   arguments: string;
 }
 
+interface ResponseComputerCall extends ResponseInputItem {
+  type: 'computer_call';
+  call_id: string;
+  actions: ComputerAction[];
+}
+
 interface ResponseUsage {
   input_tokens?: number;
   output_tokens?: number;
@@ -47,6 +61,11 @@ interface ResponseUsage {
     cache_write_tokens?: number;
   };
   output_tokens_details?: { reasoning_tokens?: number };
+}
+
+interface WebCitation {
+  title: string;
+  url: string;
 }
 
 const stripTrailingSlash = (value: string) => value.replace(/\/+$/, '');
@@ -108,6 +127,43 @@ function logResponseUsage(model: string, request: number, usage?: ResponseUsage)
   });
 }
 
+function extractWebCitations(output: ResponseInputItem[]): WebCitation[] {
+  const citations = new Map<string, WebCitation>();
+  for (const item of output) {
+    if (item.type !== 'message' || !Array.isArray(item.content)) continue;
+    for (const content of item.content as Record<string, unknown>[]) {
+      if (content.type !== 'output_text' || !Array.isArray(content.annotations)) continue;
+      for (const annotation of content.annotations as Record<string, unknown>[]) {
+        if (
+          annotation.type !== 'url_citation' ||
+          typeof annotation.url !== 'string' ||
+          !/^https?:\/\//i.test(annotation.url)
+        ) {
+          continue;
+        }
+        const title =
+          typeof annotation.title === 'string' && annotation.title.trim()
+            ? annotation.title.trim()
+            : annotation.url;
+        citations.set(annotation.url, { title, url: annotation.url });
+      }
+    }
+  }
+  return [...citations.values()];
+}
+
+function citationMarkdown(citations: WebCitation[]): string {
+  if (citations.length === 0) return '';
+  const rows = citations.map(({ title, url }) => {
+    // The console's deliberately small Markdown parser accepts only a simple
+    // link grammar, so remove delimiter characters and encode URL parentheses.
+    const safeTitle = title.replace(/[\[\]\r\n]+/g, ' ').trim() || 'Source';
+    const safeUrl = url.replace(/\(/g, '%28').replace(/\)/g, '%29');
+    return `- [${safeTitle}](${safeUrl})`;
+  });
+  return `\n\nSources:\n${rows.join('\n')}`;
+}
+
 async function emitHttpError(
   provider: AssistantProvider,
   res: Response,
@@ -154,12 +210,30 @@ async function runResponsesTurn(
 ): Promise<void> {
   const emit = ctx.emit;
   const url = `${stripTrailingSlash(baseUrl)}/responses`;
-  const tools = listTools().map((t) => ({
+  const hostedWebSearch = !ctx.utility && supportsOpenAiHostedWebSearch(model);
+  // One-shot utilities such as /compact intentionally have no chatId and do
+  // not need (or want to pay for) a visual browser tool.
+  const hostedComputer =
+    !ctx.utility &&
+    !!ctx.chatId &&
+    ctx.mode === 'agent' &&
+    ctx.approval === 'auto' &&
+    supportsOpenAiComputerUse(model);
+  const functionTools = (
+    ctx.utility ? [] : listTools({ includeWeb: !hostedWebSearch })
+  ).map((t) => ({
     type: 'function' as const,
     name: t.name,
     description: t.description,
     parameters: t.input_schema,
   }));
+  const tools: ResponseInputItem[] = [
+    ...functionTools,
+    ...(hostedWebSearch
+      ? [{ type: 'web_search', search_context_size: 'medium' as const }]
+      : []),
+    ...(hostedComputer ? [{ type: 'computer' as const }] : []),
+  ];
   const explicitCache = supportsExplicitPromptCache(model);
   const input = responseInput(turns, explicitCache);
   const cacheKey = explicitCache ? promptCacheKey(model, ctx.chatId) : undefined;
@@ -167,9 +241,13 @@ async function runResponsesTurn(
   // between model calls, but their result already tells the model what changed;
   // rebuilding the instructions here used to invalidate the entire cache on
   // every plan_update/save_memory step.
-  const instructions = systemPrompt(ctx.mode, ctx.approval, ctx.chatId);
+  const instructions = systemPrompt(ctx.mode, ctx.approval, ctx.chatId, {
+    openAiHostedWebSearch: hostedWebSearch,
+    openAiComputerUse: hostedComputer,
+  });
 
   const maxIterations = maxAgentSteps();
+  let computer: ReturnType<typeof getPublicBrowserComputer> | undefined;
   for (let i = 0; i < maxIterations; i++) {
     const res = await fetch(url, {
       method: 'POST',
@@ -204,6 +282,8 @@ async function runResponsesTurn(
     let usage: ResponseUsage | undefined;
     let completed = false;
     let streamError: string | null = null;
+    let showedHostedWebTool = false;
+    let showedComputerTool = false;
     const streamResult = await readOpenAiResponseStream({
       initialResponse: res,
       responsesUrl: url,
@@ -221,9 +301,24 @@ async function runResponsesTurn(
             error?: { message?: string };
             incomplete_details?: { reason?: string };
           };
+          item?: { type?: string };
         };
         if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
           emit({ type: 'text', text: event.delta });
+        } else if (
+          event.type === 'response.output_item.added' &&
+          event.item?.type === 'web_search_call' &&
+          !showedHostedWebTool
+        ) {
+          showedHostedWebTool = true;
+          emit({ type: 'tool', name: 'openai_web_search', label: 'searched the web' });
+        } else if (
+          event.type === 'response.output_item.added' &&
+          event.item?.type === 'computer_call' &&
+          !showedComputerTool
+        ) {
+          showedComputerTool = true;
+          emit({ type: 'tool', name: 'openai_computer', label: 'used visual browser' });
         } else if (event.type === 'response.completed') {
           output = Array.isArray(event.response?.output) ? event.response.output : [];
           usage = event.response?.usage;
@@ -274,6 +369,8 @@ async function runResponsesTurn(
       return;
     }
     logResponseUsage(model, i + 1, usage);
+    const citations = extractWebCitations(output);
+    if (citations.length > 0) emit({ type: 'text', text: citationMarkdown(citations) });
 
     const calls = output.filter(
       (item): item is ResponseFunctionCall =>
@@ -282,10 +379,16 @@ async function runResponsesTurn(
         typeof item.name === 'string' &&
         typeof item.arguments === 'string',
     );
+    const computerCalls = output.filter(
+      (item): item is ResponseComputerCall =>
+        item.type === 'computer_call' &&
+        typeof item.call_id === 'string' &&
+        Array.isArray(item.actions),
+    );
     // Preserve ALL output items, especially encrypted reasoning items, before
     // appending the matching function_call_output records.
     input.push(...output);
-    if (calls.length === 0) return;
+    if (calls.length === 0 && computerCalls.length === 0) return;
 
     for (const call of calls) {
       emit({ type: 'tool', name: call.name, label: toolLabel(call.name) });
@@ -300,6 +403,28 @@ async function runResponsesTurn(
         type: 'function_call_output',
         call_id: call.call_id,
         output: outcome.content,
+      });
+    }
+    for (const call of computerCalls) {
+      if (!computer) computer = getPublicBrowserComputer();
+      let frame;
+      try {
+        frame = await computer.run(call.actions, ctx.signal);
+      } catch (err) {
+        if (ctx.signal?.aborted) return;
+        const detail = err instanceof Error ? err.message : 'visual browser action failed';
+        emit({ type: 'error', message: `OpenAI visual browser: ${detail}` });
+        return;
+      }
+      emit({ type: 'browser', ...frame });
+      input.push({
+        type: 'computer_call_output',
+        call_id: call.call_id,
+        output: {
+          type: 'computer_screenshot',
+          image_url: frame.imageUrl,
+          detail: 'original',
+        },
       });
     }
     if (ctx.sleep) return;
@@ -321,7 +446,7 @@ async function runChatCompletionsTurn(
 ): Promise<void> {
   const emit = ctx.emit;
   const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
-  const tools = listTools().map((t) => ({
+  const tools = (ctx.utility ? [] : listTools()).map((t) => ({
     type: 'function' as const,
     function: { name: t.name, description: t.description, parameters: t.input_schema },
   }));

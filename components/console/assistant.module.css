@@ -17,6 +17,175 @@
   overflow: hidden;
 }
 
+/* Live model/operator browser. It is fixed immediately left of the docked chat,
+   covering dashboard tiles instead of resizing either the chat or transcript. */
+.browserPane {
+  position: fixed;
+  z-index: calc(var(--z-header) + 1);
+  top: var(--pad-y);
+  right: calc(var(--pad-x) + 360px + var(--space-sm));
+  width: min(760px, calc(100vw - 360px - 2 * var(--pad-x) - 2 * var(--space-sm)));
+  height: calc(100svh - 2 * var(--pad-y) - 3.4rem);
+  min-width: 32rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
+.browserHead,
+.browserBar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.browserHead {
+  justify-content: space-between;
+}
+.browserTitle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  overflow: hidden;
+  color: var(--ink-strong);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browserTitle svg {
+  flex: 0 0 auto;
+  color: var(--accent-ink);
+}
+.browserAddress {
+  min-width: 0;
+  flex: 1;
+  height: 2rem;
+  padding: 0 0.6rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.browserAddress:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.browserBarBtn,
+.browserGo {
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.browserBarBtn {
+  width: 2rem;
+  padding: 0;
+  color: var(--muted);
+  background: var(--surface);
+}
+.browserGo {
+  padding: 0 0.7rem;
+  color: var(--on-accent);
+  background: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+.browserBarBtn:hover:not(:disabled) {
+  color: var(--ink-strong);
+}
+.browserBarBtn:focus-visible,
+.browserGo:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.browserBarBtn:disabled,
+.browserGo:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.browserViewport {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  place-items: start center;
+  overflow: auto;
+  background: oklch(0.13 0.01 245);
+  cursor: default;
+  overscroll-behavior: contain;
+}
+.browserViewport:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.browserScreen {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  user-select: none;
+}
+.browserLoading {
+  align-self: center;
+  justify-self: center;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.browserBusy {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  padding: 0.25rem 0.45rem;
+  color: var(--ink-strong);
+  background: color-mix(in oklch, var(--surface) 90%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-1);
+  font-size: var(--text-xs);
+}
+.browserError,
+.browserHint {
+  margin: 0;
+  padding: 0.38rem 0.65rem;
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+}
+.browserError {
+  color: var(--down-ink);
+  background: color-mix(in oklch, var(--down) 10%, var(--surface));
+  border-bottom: 1px solid color-mix(in oklch, var(--down) 30%, var(--border));
+}
+.browserHint {
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+@media (max-width: 1100px) {
+  .browserPane {
+    inset: var(--space-xs);
+    width: auto;
+    height: auto;
+    min-width: 0;
+    z-index: calc(var(--z-header) + 1);
+  }
+}
+
 /* Mobile: full-height drawer from the right. */
 @media (max-width: 1100px) {
   .sidebar {

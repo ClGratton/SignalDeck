@@ -24,7 +24,7 @@ export async function runAnthropicTurn(
 ): Promise<void> {
   const client = new Anthropic({ apiKey });
   const emit = ctx.emit;
-  const tools: Anthropic.Tool[] = listTools().map((t) => ({
+  const tools: Anthropic.Tool[] = (ctx.utility ? [] : listTools()).map((t) => ({
     name: t.name,
     description: t.description,
     input_schema: t.input_schema as Anthropic.Tool['input_schema'],
@@ -49,7 +49,7 @@ export async function runAnthropicTurn(
       // and advances the breakpoint as the conversation/tool history grows.
       cache_control: { type: 'ephemeral' },
       ...(supportsAdaptiveThinking(model) ? { thinking: { type: 'adaptive' as const } } : {}),
-      tools,
+      tools: tools.length > 0 ? tools : undefined,
       messages,
     });
     stream.on('text', (delta) => emit({ type: 'text', text: delta }));
