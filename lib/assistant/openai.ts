@@ -275,6 +275,11 @@ async function runResponsesTurn(
 
   const maxIterations = maxAgentSteps();
   let computer: ReturnType<typeof getPublicBrowserComputer> | undefined;
+  // Keep model actions in the exact coordinate space of the screenshot that
+  // produced them. The operator may resize the shared pane while the model is
+  // reasoning; without this target, its next click would use stale pixels on a
+  // newly sized page and land above/below the intended element.
+  let computerTarget: { tabId: string; viewport: { width: number; height: number } } | undefined;
   for (let i = 0; i < maxIterations; i++) {
     const res = await fetch(url, {
       method: 'POST',
@@ -436,13 +441,14 @@ async function runResponsesTurn(
       if (!computer) computer = getPublicBrowserComputer();
       let frame;
       try {
-        frame = await computer.run(call.actions, ctx.signal);
+        frame = await computer.run(call.actions, ctx.signal, computerTarget);
       } catch (err) {
         if (ctx.signal?.aborted) return;
         const detail = err instanceof Error ? err.message : 'visual browser action failed';
         emit({ type: 'error', message: `OpenAI visual browser: ${detail}` });
         return;
       }
+      computerTarget = { tabId: frame.tabId, viewport: frame.viewport };
       emit({ type: 'browser', ...frame });
       input.push({
         type: 'computer_call_output',

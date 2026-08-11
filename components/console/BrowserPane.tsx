@@ -146,7 +146,10 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
       const payload = {
         ...body,
         ...(!('tabId' in body) && frame?.tabId ? { tabId: frame.tabId } : {}),
-        viewport: viewportSize.current,
+        // Pointer actions are calculated against the pixels in the currently
+        // displayed frame. Preserve that frame's viewport when supplied so a
+        // concurrent resize cannot move the remote target before the click.
+        ...(!('viewport' in body) ? { viewport: viewportSize.current } : {}),
       };
       const res = await fetch('/api/assistant/browser', {
         method: 'POST',
@@ -358,7 +361,10 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
           keyboardRef.current?.focus({ preventScroll: true });
           const p = point(event);
           setPulse({ x: p.localX, y: p.localY, id: Date.now() });
-          void post({ actions: [{ type: 'click', x: p.x, y: p.y, button: 'left' }] });
+          void post({
+            actions: [{ type: 'click', x: p.x, y: p.y, button: 'left' }],
+            viewport: frame.viewport,
+          });
         }}
         onContextMenu={(event) => {
           if (!frame) return;
@@ -370,7 +376,7 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
             x: ((event.clientX - rect.left) / rect.width) * remote.width,
             y: ((event.clientY - rect.top) / rect.height) * remote.height,
             button: 'right',
-          }] });
+          }], viewport: remote });
         }}
         onWheel={(event) => {
           if (!frame) return;
@@ -392,7 +398,7 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
               y: ((current.clientY - rect.top) / rect.height) * remote.height,
               scroll_x: current.x,
               scroll_y: current.y,
-            }] });
+            }], viewport: remote });
           }, 80);
         }}
         aria-label="Interactive browser page. Click, scroll, and type directly."

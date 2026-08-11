@@ -45,7 +45,7 @@ main{width:min(680px,calc(100% - 64px))}h1{font-size:30px;margin:0 0 10px}p{colo
 form{display:flex;gap:10px}input{flex:1;font:inherit;padding:13px 15px;border:1px solid #a9b4bf;border-radius:8px;background:white}
 button{font:600 15px system-ui;padding:0 20px;border:0;border-radius:8px;background:#1668dc;color:white}
 </style></head><body><main><h1>Public browser</h1><p>Search or open a public site. Signed-in sessions stay in this server-side browser; private networks remain blocked.</p>
-<form action="https://www.google.com/search" method="get"><input name="q" aria-label="Search the web" autofocus><button type="submit">Search</button></form>
+<form action="https://duckduckgo.com/" method="get"><input name="q" aria-label="Search the web" autofocus><button type="submit">Search</button></form>
 </main></body></html>`;
 
 function privateIpv4(address: string): boolean {
