@@ -42,11 +42,26 @@ const START_PAGE = `<!doctype html>
 <title>Public browser</title><style>
 html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f5f7fa;color:#17202a;font:16px system-ui,sans-serif}
 main{width:min(680px,calc(100% - 64px))}h1{font-size:30px;margin:0 0 10px}p{color:#53606d;margin:0 0 24px}
-form{display:flex;gap:10px}input{flex:1;font:inherit;padding:13px 15px;border:1px solid #a9b4bf;border-radius:8px;background:white}
-button{font:600 15px system-ui;padding:0 20px;border:0;border-radius:8px;background:#1668dc;color:white}
-</style></head><body><main><h1>Public browser</h1><p>Search or open a public site. Signed-in sessions stay in this server-side browser; private networks remain blocked.</p>
-<form action="https://duckduckgo.com/" method="get"><input name="q" aria-label="Search the web" autofocus><button type="submit">Search</button></form>
+code{font:600 14px ui-monospace,monospace;color:#26384a}
+</style></head><body><main><h1>Public browser</h1><p>Open a public URL from the address bar. For web research, ask the agent: it uses hosted search, then opens the exact result here without sending automated queries through a public search page.</p>
+<code>Ctrl L -&gt; example.com</code>
 </main></body></html>`;
+
+const SEARCH_BLOCK_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Use hosted search</title><style>
+html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f5f7fa;color:#17202a;font:16px system-ui,sans-serif}
+main{width:min(680px,calc(100% - 64px))}h1{font-size:30px;margin:0 0 10px}p{color:#53606d;line-height:1.5;margin:0}
+</style></head><body><main><h1>Use hosted search</h1><p>Public search pages challenge automated browsers regardless of the search engine. Ask the agent to search first; it will use the hosted search tool and open the exact result URL in this visual browser.</p></main></body></html>`;
+
+function publicSearchUrl(url: URL): boolean {
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (/^google\.[a-z.]+$/.test(host)) return url.pathname === '/search' && url.searchParams.has('q');
+  if (host === 'duckduckgo.com') return url.searchParams.has('q');
+  if (host === 'bing.com') return url.pathname === '/search' && url.searchParams.has('q');
+  if (host === 'search.yahoo.com') return url.pathname.startsWith('/search') && url.searchParams.has('p');
+  return false;
+}
 
 function privateIpv4(address: string): boolean {
   const p = address.split('.').map(Number);
@@ -305,6 +320,7 @@ export class PublicBrowserComputer {
     });
     this.context = await this.browser.newContext({
       viewport: { width: WIDTH, height: HEIGHT },
+      deviceScaleFactor: 1,
       acceptDownloads: false,
       storageState: this.savedState(),
     });
@@ -319,6 +335,14 @@ export class PublicBrowserComputer {
       }
       if (!['http:', 'https:'].includes(url.protocol)) {
         await route.continue();
+        return;
+      }
+      if (
+        request.isNavigationRequest() &&
+        request.frame().parentFrame() === null &&
+        publicSearchUrl(url)
+      ) {
+        await route.fulfill({ status: 200, contentType: 'text/html', body: SEARCH_BLOCK_PAGE });
         return;
       }
       if (!(await this.publicHost(url.hostname))) {
@@ -337,7 +361,7 @@ export class PublicBrowserComputer {
   private async frame(page: Page): Promise<BrowserFrame> {
     const tabId = this.registerPage(page, false);
     const [screenshot, title, tabs] = await Promise.all([
-      page.screenshot({ type: 'jpeg', quality: 78, animations: 'disabled' }),
+      page.screenshot({ type: 'jpeg', quality: 78, animations: 'disabled', scale: 'css' }),
       page.title().catch(() => ''),
       Promise.all([...this.pages.entries()].map(async ([id, tab]) => ({
         id,

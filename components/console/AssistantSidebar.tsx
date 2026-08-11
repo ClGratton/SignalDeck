@@ -479,6 +479,9 @@ export function AssistantSidebar({
   //    own chat-store push so it can't clobber the turn the server is writing.
   const lastSeqRef = useRef<Map<string, number>>(new Map());
   const serverOwnedRef = useRef<Set<string>>(new Set());
+  // Reconcile polls must not declare a task dead while its start request is
+  // still in flight and has not yet appeared in the server registry.
+  const startingTaskRef = useRef<Set<string>>(new Set());
   // Guards the one-time task-reattach pass after load (so it runs exactly once).
   const activatedRef = useRef(false);
   // Mark/unmark a chat as having a live server task: update the ref (sync, for
@@ -840,6 +843,9 @@ export function AssistantSidebar({
     return t && t.kind === 'timer' ? t.id : null;
   }, [items]);
   const timerLocks = !!runningTimerId; // composer locked while a timer waits
+  // The server-owned set is the durable truth. `busy` only mirrors the active
+  // stream and can briefly fall false during a slow start or reconnect.
+  const activeTaskLive = !!activeIdRef.current && liveChats.includes(activeIdRef.current);
 
   const choose = (provider: AssistantProvider, model: string) => {
     const next = { provider, model };
@@ -1621,7 +1627,13 @@ export function AssistantSidebar({
     async (raw: string) => {
       const text = raw.trim();
       const sentAttachments = attachments;
-      if ((!text && sentAttachments.length === 0) || busy || attachmentBusy || !effective) return;
+      if (
+        (!text && sentAttachments.length === 0) ||
+        busy ||
+        activeTaskLive ||
+        attachmentBusy ||
+        !effective
+      ) return;
       if (unsupportedAttachment) {
         setAttachmentError(`${activeModelOption?.label ?? 'This model'} does not support ${unsupportedAttachment.kind} attachments.`);
         return;
@@ -1646,6 +1658,7 @@ export function AssistantSidebar({
       if (!activeIdRef.current) activeIdRef.current = newId();
       const chatId = activeIdRef.current;
       markServerOwned(chatId);
+      startingTaskRef.current.add(chatId);
 
       const notes = contextNotes.current.splice(0);
       const sent = notes.length > 0 ? `[context: ${notes.join('; ')}]\n${text}` : text;
@@ -1681,6 +1694,7 @@ export function AssistantSidebar({
           }),
           signal: controller.signal,
         });
+        startingTaskRef.current.delete(chatId);
         if (res.status === 401) {
           setSessionExpired(true);
           setItems((prev) => [
@@ -1718,6 +1732,10 @@ export function AssistantSidebar({
           return;
         }
         setSessionExpired(false); // got a live stream — the session is valid
+        // A slow start may have overlapped a status poll. Restore the controls
+        // now that the server has accepted the task and returned its stream.
+        markServerOwned(chatId);
+        if (activeIdRef.current === chatId) setBusy(true);
         await streamLoop(chatId, res.body.getReader(), controller.signal);
       } catch (err) {
         if ((err as Error)?.name === 'AbortError') {
@@ -1729,10 +1747,13 @@ export function AssistantSidebar({
           // rather than stranding the turn as "connection lost".
           void reattachResume(chatId);
         }
+      } finally {
+        startingTaskRef.current.delete(chatId);
       }
     },
     [
       busy,
+      activeTaskLive,
       attachmentBusy,
       attachments,
       unsupportedAttachment,
@@ -1764,7 +1785,7 @@ export function AssistantSidebar({
       const liveIds = new Set(live.map((t) => t.chatId));
       for (const t of live) markServerOwned(t.chatId);
       for (const id of [...serverOwnedRef.current]) {
-        if (!liveIds.has(id)) unmarkServerOwned(id);
+        if (!liveIds.has(id) && !startingTaskRef.current.has(id)) unmarkServerOwned(id);
       }
       const active = activeIdRef.current;
       if (!active) return;
@@ -1818,6 +1839,7 @@ export function AssistantSidebar({
         const cur = (d.tasks ?? []).find((t) => t.chatId === chatId) ?? null;
         if (cancelled || activeIdRef.current !== chatId) return;
         if (!cur) {
+          if (startingTaskRef.current.has(chatId)) return;
           // Task is gone — unlock so typed messages aren't swallowed.
           unmarkServerOwned(chatId);
           setBusy(false);
@@ -1870,6 +1892,7 @@ export function AssistantSidebar({
         if (cancelled) return;
         for (const id of [...serverOwnedRef.current]) {
           if (liveIds.has(id)) continue;
+          if (startingTaskRef.current.has(id)) continue;
           unmarkServerOwned(id);
           void reloadChatFromServer(id);
           // The now-finished task was the chat on screen — settle its lock so the
@@ -2430,7 +2453,7 @@ export function AssistantSidebar({
               }
             })
           )}
-          {busy && activeIdRef.current && liveChats.includes(activeIdRef.current) ? (
+          {activeTaskLive && !timerLocks ? (
             // "working" is gated on the SERVER-reconciled live-task set (the same
             // signal as the chat-list dot), not the bare client busy flag — so it
             // can't show the illusion of working after the task has actually ended
@@ -2844,14 +2867,14 @@ export function AssistantSidebar({
             multiple
             accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.json,.csv,.tsv,.js,.jsx,.ts,.tsx,.py,.sh,.yaml,.yml,.xml,.html,.css,.sql,.log,.doc,.docx,.rtf,.ppt,.pptx,.odt,.xls,.xlsx,.ods"
             onChange={(e) => void uploadFiles(Array.from(e.target.files ?? []))}
-            disabled={!effective || busy || timerLocks || attachmentBusy || attachmentKinds.length === 0}
+            disabled={!effective || busy || activeTaskLive || timerLocks || attachmentBusy || attachmentKinds.length === 0}
             aria-label="Attach files"
           />
           <button
             type="button"
             className={styles.attachBtn}
             onClick={() => fileInputRef.current?.click()}
-            disabled={!effective || busy || timerLocks || attachmentBusy || attachmentKinds.length === 0}
+            disabled={!effective || busy || activeTaskLive || timerLocks || attachmentBusy || attachmentKinds.length === 0}
             aria-label="Attach files"
             title={attachmentKinds.length ? 'Attach files' : 'This model does not accept attachments'}
           >
@@ -2883,16 +2906,16 @@ export function AssistantSidebar({
             disabled={!effective || timerLocks}
             aria-label="Message the assistant"
           />
-          {busy || timerLocks ? (
+          {busy || activeTaskLive || timerLocks ? (
             <button
               type="button"
               className={`${styles.sendBtn} ${styles.stopBtn}`}
               onClick={() => {
-                if (busy) stop();
+                if (busy || activeTaskLive) stop();
                 else if (runningTimerId) cancelTimerTask(runningTimerId);
               }}
-              aria-label={busy ? 'Stop' : 'Cancel timer'}
-              title={busy ? 'Stop' : 'Cancel the timer'}
+              aria-label={busy || activeTaskLive ? 'Stop' : 'Cancel timer'}
+              title={busy || activeTaskLive ? 'Stop' : 'Cancel the timer'}
             >
               <Square size={13} strokeWidth={2.6} aria-hidden fill="currentColor" />
             </button>

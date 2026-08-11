@@ -56,11 +56,9 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
   const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wheel = useRef({ x: 0, y: 0, clientX: 0, clientY: 0 });
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestSeq = useRef(0);
   const appliedSeq = useRef(0);
   const frameRef = useRef(frame);
-  const postRef = useRef<((body: Record<string, unknown>, refresh?: boolean) => Promise<void>) | null>(null);
   const [paneFrame, setPaneFrame] = useState<CSSProperties | undefined>();
   const [typingActive, setTypingActive] = useState(false);
 
@@ -115,12 +113,16 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
     });
   }, [onFrame]);
 
-  const snapshot = useCallback(async (tabId?: string, quiet = false) => {
+  const snapshot = useCallback(async (tabId?: string, quiet = false, fit = true) => {
     const seq = ++requestSeq.current;
     if (!quiet) setPending((count) => count + 1);
     try {
-      const size = viewportSize.current;
-      const params = new URLSearchParams({ width: String(size.width), height: String(size.height) });
+      const params = new URLSearchParams();
+      if (fit) {
+        const size = viewportSize.current;
+        params.set('width', String(size.width));
+        params.set('height', String(size.height));
+      }
       if (tabId) params.set('tabId', tabId);
       const res = await fetch(`/api/assistant/browser?${params}`, { cache: 'no-store' });
       const data = (await res.json()) as FramePayload;
@@ -135,7 +137,9 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
 
   const scheduleRefresh = useCallback((tabId?: string) => {
     if (refreshTimer.current) clearTimeout(refreshTimer.current);
-    refreshTimer.current = setTimeout(() => void snapshot(tabId, true), 700);
+    // Refresh pixels without resizing the remote page. A resize changes page
+    // layout and invalidates coordinates in the screenshot being displayed.
+    refreshTimer.current = setTimeout(() => void snapshot(tabId, true, false), 700);
   }, [snapshot]);
 
   const post = useCallback(async (body: Record<string, unknown>, refresh = true) => {
@@ -146,10 +150,6 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
       const payload = {
         ...body,
         ...(!('tabId' in body) && frame?.tabId ? { tabId: frame.tabId } : {}),
-        // Pointer actions are calculated against the pixels in the currently
-        // displayed frame. Preserve that frame's viewport when supplied so a
-        // concurrent resize cannot move the remote target before the click.
-        ...(!('viewport' in body) ? { viewport: viewportSize.current } : {}),
       };
       const res = await fetch('/api/assistant/browser', {
         method: 'POST',
@@ -166,19 +166,14 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
       setPending((count) => Math.max(0, count - 1));
     }
   }, [applyPayload, frame?.tabId, scheduleRefresh]);
-  postRef.current = post;
-
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
     viewportSize.current = paneViewport(element);
     const observer = new ResizeObserver(() => {
+      // Save the newest pane size for the first frame of a newly opened
+      // browser, but never resize a live remote page behind a visible frame.
       viewportSize.current = paneViewport(element);
-      if (resizeTimer.current) clearTimeout(resizeTimer.current);
-      resizeTimer.current = setTimeout(() => {
-        const tabId = frameRef.current?.tabId;
-        if (tabId) void postRef.current?.({ command: 'resize', tabId }, false);
-      }, 180);
     });
     observer.observe(element);
     if (!frameRef.current) void snapshot();
@@ -189,7 +184,6 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
     if (typeTimer.current) clearTimeout(typeTimer.current);
     if (wheelTimer.current) clearTimeout(wheelTimer.current);
     if (refreshTimer.current) clearTimeout(refreshTimer.current);
-    if (resizeTimer.current) clearTimeout(resizeTimer.current);
   }, []);
 
   const sendBuffered = useCallback((extraActions: Record<string, unknown>[] = []) => {
