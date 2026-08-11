@@ -20,7 +20,7 @@ import {
   type PointerEvent,
   type RefObject,
 } from 'react';
-import type { AssistantEvent, BrowserViewportDto } from '@/lib/assistant/types';
+import type { AssistantEvent } from '@/lib/assistant/types';
 import styles from './assistant.module.css';
 
 type BrowserFrame = Extract<AssistantEvent, { type: 'browser' }>;
@@ -33,14 +33,6 @@ interface BrowserPaneProps {
   anchorRef: RefObject<HTMLElement | null>;
 }
 
-function paneViewport(element: HTMLDivElement | null): BrowserViewportDto {
-  if (!element) return { width: 1280, height: 720 };
-  return {
-    width: Math.max(480, Math.round(element.clientWidth)),
-    height: Math.max(320, Math.round(element.clientHeight)),
-  };
-}
-
 export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneProps) {
   const [address, setAddress] = useState(frame?.url ?? '');
   const [pending, setPending] = useState(0);
@@ -48,7 +40,6 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
   const [pulse, setPulse] = useState<{ x: number; y: number; id: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const keyboardRef = useRef<HTMLTextAreaElement | null>(null);
-  const viewportSize = useRef<BrowserViewportDto>({ width: 1280, height: 720 });
   const typed = useRef('');
   const typingGeneration = useRef(0);
   const composing = useRef(false);
@@ -113,16 +104,11 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
     });
   }, [onFrame]);
 
-  const snapshot = useCallback(async (tabId?: string, quiet = false, fit = true) => {
+  const snapshot = useCallback(async (tabId?: string, quiet = false) => {
     const seq = ++requestSeq.current;
     if (!quiet) setPending((count) => count + 1);
     try {
       const params = new URLSearchParams();
-      if (fit) {
-        const size = viewportSize.current;
-        params.set('width', String(size.width));
-        params.set('height', String(size.height));
-      }
       if (tabId) params.set('tabId', tabId);
       const res = await fetch(`/api/assistant/browser?${params}`, { cache: 'no-store' });
       const data = (await res.json()) as FramePayload;
@@ -139,7 +125,7 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
     if (refreshTimer.current) clearTimeout(refreshTimer.current);
     // Refresh pixels without resizing the remote page. A resize changes page
     // layout and invalidates coordinates in the screenshot being displayed.
-    refreshTimer.current = setTimeout(() => void snapshot(tabId, true, false), 700);
+    refreshTimer.current = setTimeout(() => void snapshot(tabId, true), 700);
   }, [snapshot]);
 
   const post = useCallback(async (body: Record<string, unknown>, refresh = true) => {
@@ -167,17 +153,10 @@ export function BrowserPane({ frame, onFrame, onClose, anchorRef }: BrowserPaneP
     }
   }, [applyPayload, frame?.tabId, scheduleRefresh]);
   useEffect(() => {
-    const element = viewportRef.current;
-    if (!element) return;
-    viewportSize.current = paneViewport(element);
-    const observer = new ResizeObserver(() => {
-      // Save the newest pane size for the first frame of a newly opened
-      // browser, but never resize a live remote page behind a visible frame.
-      viewportSize.current = paneViewport(element);
-    });
-    observer.observe(element);
+    // Chromium keeps one stable viewport. The pane scales its pixels instead of
+    // resizing the remote page, preserving both the browser identity and the
+    // coordinate system used by human and agent clicks.
     if (!frameRef.current) void snapshot();
-    return () => observer.disconnect();
   }, [snapshot]);
 
   useEffect(() => () => {

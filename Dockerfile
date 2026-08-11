@@ -25,12 +25,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+ENV DISPLAY=:99
 
-# OpenAI computer-use runs in a disposable, headless Chromium context. Install
-# only the system browser (playwright-core supplies the driver); no browser
-# profile or credentials are baked into the image.
+# Run the shared browser as regular headed Chromium inside a private virtual
+# display. Its user-data directory lives under /app/data, so signed-in sessions
+# and the browser identity survive app restarts and deployments without baking
+# profile data or credentials into the image.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium ca-certificates fonts-liberation \
+    && apt-get install -y --no-install-recommends chromium xvfb ca-certificates fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Next's standalone bundle (server.js + traced node_modules), static assets,
@@ -51,4 +53,4 @@ RUN mkdir -p /app/data && chown -R node:node /app
 USER node
 
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb.log 2>&1 & sleep 0.2; exec node server.js"]

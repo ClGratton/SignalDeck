@@ -20,6 +20,8 @@ const HEIGHT = 720;
 const MAX_ACTIONS_PER_CALL = 50;
 const PUBLIC_DNS_TIMEOUT_MS = 4_000;
 const STATE_FILE = path.join(process.cwd(), 'data', 'assistant-browser-state.json');
+const PROFILE_DIR = path.join(process.cwd(), 'data', 'assistant-browser-profile');
+const PROFILE_MIGRATION_MARKER = path.join(PROFILE_DIR, '.legacy-state-imported');
 
 export type ComputerAction = Record<string, unknown> & { type?: string };
 export interface BrowserFrame {
@@ -41,27 +43,11 @@ const START_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Public browser</title><style>
 html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f5f7fa;color:#17202a;font:16px system-ui,sans-serif}
-main{width:min(680px,calc(100% - 64px))}h1{font-size:30px;margin:0 0 10px}p{color:#53606d;margin:0 0 24px}
-code{font:600 14px ui-monospace,monospace;color:#26384a}
-</style></head><body><main><h1>Public browser</h1><p>Open a public URL from the address bar. For web research, ask the agent: it uses hosted search, then opens the exact result here without sending automated queries through a public search page.</p>
-<code>Ctrl L -&gt; example.com</code>
+main{width:min(760px,calc(100% - 64px))}h1{font-size:30px;margin:0 0 10px}p{color:#53606d;margin:0 0 24px}
+form{display:flex;gap:10px}input{box-sizing:border-box;min-width:0;flex:1;padding:12px 14px;border:1px solid #aeb8c3;border-radius:8px;font:16px system-ui,sans-serif}button{padding:0 20px;border:0;border-radius:8px;background:#2563dc;color:white;font:700 15px system-ui,sans-serif}
+</style></head><body><main><h1>Shared browser</h1><p>You and the agent use this same persistent browser profile. Signed-in sessions remain server-side and survive restarts.</p>
+<form action="https://www.google.com/search" method="get"><input name="q" autofocus autocomplete="off" aria-label="Search"><button type="submit">Search</button></form>
 </main></body></html>`;
-
-const SEARCH_BLOCK_PAGE = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Use hosted search</title><style>
-html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f5f7fa;color:#17202a;font:16px system-ui,sans-serif}
-main{width:min(680px,calc(100% - 64px))}h1{font-size:30px;margin:0 0 10px}p{color:#53606d;line-height:1.5;margin:0}
-</style></head><body><main><h1>Use hosted search</h1><p>Public search pages challenge automated browsers regardless of the search engine. Ask the agent to search first; it will use the hosted search tool and open the exact result URL in this visual browser.</p></main></body></html>`;
-
-function publicSearchUrl(url: URL): boolean {
-  const host = url.hostname.toLowerCase().replace(/^www\./, '');
-  if (/^google\.[a-z.]+$/.test(host)) return url.pathname === '/search' && url.searchParams.has('q');
-  if (host === 'duckduckgo.com') return url.searchParams.has('q');
-  if (host === 'bing.com') return url.pathname === '/search' && url.searchParams.has('q');
-  if (host === 'search.yahoo.com') return url.pathname.startsWith('/search') && url.searchParams.has('p');
-  return false;
-}
 
 function privateIpv4(address: string): boolean {
   const p = address.split('.').map(Number);
@@ -301,29 +287,35 @@ export class PublicBrowserComputer {
         'Visual browser is unavailable: Chromium was not found. Set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH.',
       );
     }
-    this.browser = await chromium.launch({
+    const importLegacyState = !fs.existsSync(PROFILE_MIGRATION_MARKER);
+    this.context = await chromium.launchPersistentContext(PROFILE_DIR, {
       executablePath,
-      headless: true,
+      headless: false,
       // The production app already runs as an unprivileged user inside its own
       // container. Debian's system Chromium has no usable setuid/user-namespace
       // sandbox in that environment; forcing it on makes Chromium exit before
       // a page is created. Let Playwright apply its container launch mode.
       chromiumSandbox: false,
-      env: {},
+      // Pass only the virtual display, never the dashboard's credential-bearing
+      // environment, into the public browser process.
+      env: process.platform === 'linux' ? { DISPLAY: process.env.DISPLAY ?? ':99' } : {},
       args: ['--disable-extensions', '--disable-file-system', '--disable-dev-shm-usage'],
+      viewport: { width: WIDTH, height: HEIGHT },
+      deviceScaleFactor: 1,
+      acceptDownloads: false,
     });
-    this.browser.on('disconnected', () => {
+    this.browser = this.context.browser() ?? undefined;
+    this.browser?.on('disconnected', () => {
       this.browser = undefined;
       this.context = undefined;
       this.pages.clear();
       this.activeTabId = undefined;
     });
-    this.context = await this.browser.newContext({
-      viewport: { width: WIDTH, height: HEIGHT },
-      deviceScaleFactor: 1,
-      acceptDownloads: false,
-      storageState: this.savedState(),
-    });
+    if (importLegacyState) {
+      const legacy = this.savedState();
+      if (legacy?.cookies.length) await this.context.addCookies(legacy.cookies);
+      writeFileAtomic(PROFILE_MIGRATION_MARKER, 'imported\n');
+    }
     await this.context.route('**/*', async (route) => {
       const request = route.request();
       let url: URL;
@@ -337,14 +329,6 @@ export class PublicBrowserComputer {
         await route.continue();
         return;
       }
-      if (
-        request.isNavigationRequest() &&
-        request.frame().parentFrame() === null &&
-        publicSearchUrl(url)
-      ) {
-        await route.fulfill({ status: 200, contentType: 'text/html', body: SEARCH_BLOCK_PAGE });
-        return;
-      }
       if (!(await this.publicHost(url.hostname))) {
         await route.abort('blockedbyclient');
         return;
@@ -352,7 +336,7 @@ export class PublicBrowserComputer {
       await route.continue();
     });
     this.context.on('page', (page) => this.registerPage(page));
-    const page = await this.context.newPage();
+    const page = this.context.pages()[0] ?? await this.context.newPage();
     this.registerPage(page);
     await page.setContent(START_PAGE, { waitUntil: 'domcontentloaded' });
     return page;
@@ -576,10 +560,12 @@ export class PublicBrowserComputer {
     await this.persistState().catch(() => undefined);
     this.pages.clear();
     this.activeTabId = undefined;
+    const context = this.context;
     this.context = undefined;
     const browser = this.browser;
     this.browser = undefined;
-    if (browser) await browser.close().catch(() => undefined);
+    if (context) await context.close().catch(() => undefined);
+    else if (browser) await browser.close().catch(() => undefined);
   }
 }
 
@@ -587,9 +573,9 @@ const browserGlobal = globalThis as typeof globalThis & {
   __grtlabsPublicBrowser?: PublicBrowserComputer;
 };
 
-/** One browser/session for the single signed-in operator. Routes and the model
- * share this instance; cookies are persisted separately so a process restart
- * can reopen the same logged-in session without exposing cookie values. */
+/** One persistent browser/profile for the single signed-in operator. Routes and
+ * the model share this instance; the profile stays server-side and survives a
+ * restart without exposing cookie or credential values. */
 export function getPublicBrowserComputer(): PublicBrowserComputer {
   return (browserGlobal.__grtlabsPublicBrowser ??= new PublicBrowserComputer());
 }
