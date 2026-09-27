@@ -46,7 +46,7 @@ WebSocket (path has NO leading slash = the command type, body = the rest of the 
 ## cloudflare  (REST, /client/v4)
 - GET /client/v4/zones?name={domain} → zone id ; GET /client/v4/zones/{zone}/dns_records?name={fqdn}
 - POST .../dns_records  body {"type":"A"|"CNAME"|…,"name":"{fqdn}","content":"{target}","proxied":true,"ttl":1} ; PATCH/DELETE .../dns_records/{id}
-- Reads use a read-only token; WRITES use a separate write token and can be switched off by the owner (the result says so). A 403 on a write = the write token lacks that permission (name it, e.g. Zone → DNS → Edit).
+- Uses the agents' write token (reads too) while Cloudflare writes are switched on; the owner can switch writes off (the result says so). A 403 = the token lacks that permission (name it, e.g. Zone → DNS → Edit / Zone → DNS → Read).
 
 ## coolify  (REST, /api/v1 — auto-prefixed; Bearer token)
 - Discover: GET /servers , GET /projects (→ project uuid + environments) , GET /applications , GET /applications/{uuid}

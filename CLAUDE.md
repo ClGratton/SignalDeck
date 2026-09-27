@@ -39,8 +39,11 @@ The backend tokens come in two tiers, chosen per CODE PATH (not per file):
   the lab. The auth builders are scoped: `pveAuth('read'|'agent')`,
   `haAuth('read'|'agent')`; TrueNAS-RPC / HA-WebSocket / SSH agent calls use
   `cfgAgent`. SSH is agent-only already; Jellyfin stays single-key. Cloudflare
-  is two-tier: READS use `CLOUDFLARE_API_TOKEN` (also the public traffic
-  chart), WRITES use `CLOUDFLARE_API_TOKEN_AGENT`. Coolify and NPM credentials
+  is two-tier by PATH: the display path (public traffic chart) uses
+  `CLOUDFLARE_API_TOKEN`; the agent path (`lab_request`) uses
+  `CLOUDFLARE_API_TOKEN_AGENT` for reads AND writes while
+  `AGENT_ALLOW_CLOUDFLARE_WRITE` is on (the read token may not even list DNS);
+  switched off ⇒ agent reads fall back to the read token. Coolify and NPM credentials
   exist ONLY on the agent path (see "Edge backends" below).
 
 Both tiers live in the same gitignored store — co-location is fine; the

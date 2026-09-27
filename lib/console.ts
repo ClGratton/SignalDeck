@@ -755,8 +755,7 @@ export function labBackendStatus(): string {
   return (
     `Edge backends — coolify: ${state(!!cfg('COOLIFY_HOST') && !!cfg('COOLIFY_API_TOKEN'), coolifyAllowed())}; ` +
     `npm: ${state(!!cfg('NPM_HOST') && !!cfg('NPM_EMAIL') && !!cfg('NPM_PASSWORD'), npmAllowed())}; ` +
-    `cloudflare writes: ${state(!!cfg('CLOUDFLARE_API_TOKEN_AGENT'), cloudflareWriteAllowed())} ` +
-    `(cloudflare reads use the read-only token).`
+    `cloudflare writes: ${state(!!cfg('CLOUDFLARE_API_TOKEN_AGENT'), cloudflareWriteAllowed())}.`
   );
 }
 
@@ -957,8 +956,10 @@ export async function labRequest(
       return { ok: true, detail: `${method} ${p} → ${clip(JSON.stringify(res.data ?? null))}` };
     }
     case 'cloudflare': {
-      // Reads use the read-only token (the traffic chart's); anything else needs
-      // the agents' write token and the Settings switch.
+      // Agent path: with the switch on, the agents' write token for everything
+      // (reads too — the read-only token, which the public traffic chart uses,
+      // may not even list DNS records). Switch off ⇒ reads fall back to the read
+      // token and writes are refused.
       const write = method !== 'GET';
       if (write && !cloudflareWriteAllowed()) return disabled('Cloudflare write access');
       if (write && !cfg('CLOUDFLARE_API_TOKEN_AGENT')) {
@@ -968,7 +969,7 @@ export async function labRequest(
             'No Cloudflare WRITE token configured (Settings → Agent credentials → Cloudflare API token — write). The read token cannot change anything.',
         };
       }
-      const token = write ? cfg('CLOUDFLARE_API_TOKEN_AGENT') : cfg('CLOUDFLARE_API_TOKEN');
+      const token = cloudflareWriteAllowed() ? cfgAgent('CLOUDFLARE_API_TOKEN') : cfg('CLOUDFLARE_API_TOKEN');
       if (!token) return { ok: false, detail: 'Cloudflare is not configured.' };
       let p = path.trim();
       if (!p.startsWith('/')) p = '/' + p;
