@@ -101,7 +101,7 @@ export function AgentAccessSettings() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/agent/tokens', { cache: 'no-store' });
+      const res = await fetch('/api/settings/agent-tokens', { cache: 'no-store' });
       if (!res.ok) return setTokens([]);
       const d = (await res.json()) as { tokens: TokenView[]; endpoint: string | null; calls: CallView[] };
       setTokens(d.tokens);
@@ -119,7 +119,7 @@ export function AgentAccessSettings() {
   const mint = useCallback(async () => {
     setBusy(true);
     try {
-      const token = await reveal('/api/agent/tokens', { name: name.trim() || 'agent' });
+      const token = await reveal('/api/settings/agent-tokens', { name: name.trim() || 'agent' });
       if (token) {
         setMinted(token);
         setCopied(false);
@@ -133,7 +133,7 @@ export function AgentAccessSettings() {
 
   const revoke = useCallback(
     async (id: string) => {
-      await fetch('/api/agent/tokens', {
+      await fetch('/api/settings/agent-tokens', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),

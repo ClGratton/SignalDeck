@@ -168,7 +168,7 @@ no-approval path to anything else. What MUST hold instead:
 - **Per-agent tokens** (`lib/agent-tokens.ts`, `data/agent-tokens.json`): 256-bit
   random, stored ONLY as SHA-256, compared in constant time, shown once at mint.
   Minting requires a session AND a fresh password + TOTP (reveal-style re-auth);
-  list/revoke are session-gated (`/api/agent/tokens`). No route ever returns a
+  list/revoke are session-gated (`/api/settings/agent-tokens`). No route ever returns a
   token or hash after minting.
 - **Audit, not approval**: every tool call is appended to `data/agent-audit.json`
   (`lib/agent-audit.ts`, bounded) with token name, tool, clipped request, ok, ms.
