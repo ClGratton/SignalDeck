@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'server-only';
-import { labFetch, envBool, trimSlash } from '@/lib/homelab';
+import { labFetch, envBool, trimSlash, type LabMethod } from '@/lib/homelab';
 import { openLabSocket, type LabSocket } from '@/lib/ws-rpc';
 import { cfg, cfgAgent } from '@/lib/service-config';
 
@@ -720,14 +720,50 @@ export async function haCallService(
 // server resolves that service's own base URL, auth, and transport. This is the
 // assistant's universal hands — it can reach anything the tokens allow.
 
-export type LabService = 'proxmox' | 'truenas' | 'jellyfin' | 'homeassistant' | 'cloudflare';
+export type LabService =
+  | 'proxmox'
+  | 'truenas'
+  | 'jellyfin'
+  | 'homeassistant'
+  | 'cloudflare'
+  | 'coolify'
+  | 'npm';
 export const LAB_SERVICES: LabService[] = [
   'proxmox',
   'truenas',
   'jellyfin',
   'homeassistant',
   'cloudflare',
+  'coolify',
+  'npm',
 ];
+
+// ── Edge-backend switches (Settings, default ON) ────────────────────────────
+// Coolify, NPM and Cloudflare WRITE are the public edge. The owner wants both
+// agents to manage them freely (see CLAUDE.md "Edge backends"), with one kill
+// switch each. Off ⇒ the call is refused with a result that SAYS so, and
+// labBackendStatus() tells both agents up front.
+const isOn = (name: string) => !/^(false|0|no|off)$/i.test((cfg(name) ?? '').trim());
+export const coolifyAllowed = () => isOn('AGENT_ALLOW_COOLIFY');
+export const npmAllowed = () => isOn('AGENT_ALLOW_NPM');
+export const cloudflareWriteAllowed = () => isOn('AGENT_ALLOW_CLOUDFLARE_WRITE');
+
+/** One line for the agents' context: which edge backends they may use now. */
+export function labBackendStatus(): string {
+  const state = (configured: boolean, allowed: boolean) =>
+    !allowed ? 'DISABLED by the owner in Settings' : configured ? 'available' : 'not configured yet';
+  return (
+    `Edge backends — coolify: ${state(!!cfg('COOLIFY_HOST') && !!cfg('COOLIFY_API_TOKEN'), coolifyAllowed())}; ` +
+    `npm: ${state(!!cfg('NPM_HOST') && !!cfg('NPM_EMAIL') && !!cfg('NPM_PASSWORD'), npmAllowed())}; ` +
+    `cloudflare writes: ${state(!!cfg('CLOUDFLARE_API_TOKEN_AGENT'), cloudflareWriteAllowed())} ` +
+    `(cloudflare reads use the read-only token).`
+  );
+}
+
+const disabled = (what: string) => ({
+  ok: false,
+  detail: `${what} is DISABLED by the owner in Settings. Do not work around it — tell the operator it is switched off.`,
+});
 
 // TrueNAS middleware puts the GENERIC text in `message` ("Method call error")
 // and the ACTUAL cause in `data` — reason, errname, and (for validation errors)
@@ -869,14 +905,17 @@ function haWsCall(
  *  endpoint (or, for TrueNAS, the JSON-RPC method name) and `body` the payload. */
 export async function labRequest(
   service: LabService,
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  method: LabMethod,
   path: string,
   body?: unknown,
 ): Promise<{ ok: boolean; detail: string }> {
+  if (method === 'PATCH' && (service === 'proxmox' || service === 'homeassistant')) {
+    return { ok: false, detail: `${service} has no PATCH endpoints — use PUT/POST.` };
+  }
   switch (service) {
     case 'proxmox':
       return proxmoxRequest(
-        method,
+        method as 'GET' | 'POST' | 'PUT' | 'DELETE',
         path,
         body && typeof body === 'object' ? (body as Record<string, unknown>) : undefined,
       );
@@ -888,7 +927,7 @@ export async function labRequest(
       if (p && !p.startsWith('/') && p.includes('/')) {
         return haWsCall(p, body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {});
       }
-      return haRequest(method, path, body);
+      return haRequest(method as 'GET' | 'POST' | 'PUT' | 'DELETE', path, body);
     }
     case 'truenas': {
       const host = cfg('TRUENAS_HOST');
@@ -918,7 +957,18 @@ export async function labRequest(
       return { ok: true, detail: `${method} ${p} → ${clip(JSON.stringify(res.data ?? null))}` };
     }
     case 'cloudflare': {
-      const token = cfg('CLOUDFLARE_API_TOKEN');
+      // Reads use the read-only token (the traffic chart's); anything else needs
+      // the agents' write token and the Settings switch.
+      const write = method !== 'GET';
+      if (write && !cloudflareWriteAllowed()) return disabled('Cloudflare write access');
+      if (write && !cfg('CLOUDFLARE_API_TOKEN_AGENT')) {
+        return {
+          ok: false,
+          detail:
+            'No Cloudflare WRITE token configured (Settings → Agent credentials → Cloudflare API token — write). The read token cannot change anything.',
+        };
+      }
+      const token = write ? cfg('CLOUDFLARE_API_TOKEN_AGENT') : cfg('CLOUDFLARE_API_TOKEN');
       if (!token) return { ok: false, detail: 'Cloudflare is not configured.' };
       let p = path.trim();
       if (!p.startsWith('/')) p = '/' + p;
@@ -936,5 +986,95 @@ export async function labRequest(
         };
       return { ok: true, detail: `${method} ${p} → ${clip(JSON.stringify(res.data ?? null))}` };
     }
+    case 'coolify': {
+      if (!coolifyAllowed()) return disabled('Coolify access');
+      const host = cfg('COOLIFY_HOST');
+      const token = cfg('COOLIFY_API_TOKEN');
+      if (!host || !token) {
+        return { ok: false, detail: 'Coolify is not configured (Settings → Coolify: URL + API token).' };
+      }
+      let p = path.trim();
+      if (!p.startsWith('/')) p = '/' + p;
+      if (!p.startsWith('/api/')) p = '/api/v1' + p;
+      const res = await labFetch(`${trimSlash(host)}${p}`, {
+        method,
+        headers: { Authorization: `Bearer ${token}` },
+        verifyTls: envBool(cfg('COOLIFY_VERIFY_TLS')),
+        ...(body != null ? { body } : {}),
+      });
+      return restOutcome('Coolify', method, p, res);
+    }
+    case 'npm':
+      if (!npmAllowed()) return disabled('Nginx Proxy Manager access');
+      return npmRequest(method, path, body);
   }
+}
+
+function restOutcome(
+  label: string,
+  method: LabMethod,
+  p: string,
+  res: { ok: boolean; status: number; data: unknown } | null,
+): { ok: boolean; detail: string } {
+  if (!res) return { ok: false, detail: `${label} did not respond.` };
+  if (!res.ok)
+    return {
+      ok: false,
+      detail: `${label} returned HTTP ${res.status}.${res.data != null ? ' ' + clip(JSON.stringify(res.data)) : ''}`,
+    };
+  return { ok: true, detail: `${method} ${p} → HTTP ${res.status}. ${clip(JSON.stringify(res.data ?? null))}` };
+}
+
+// ── Nginx Proxy Manager ─────────────────────────────────────────────────────
+// NPM has no API keys: its API takes a short-lived JWT from POST /api/tokens with
+// a user's email + password. Use a DEDICATED NPM user for the agents (NPM →
+// Users, with the permissions they need) rather than the admin account. The JWT
+// is cached per process and renewed before expiry or on a 401; the credentials
+// never leave the server.
+let npmJwt: { token: string; exp: number; key: string } | null = null;
+
+async function npmToken(base: string, verifyTls: boolean, force: boolean): Promise<string | { error: string }> {
+  const identity = cfg('NPM_EMAIL');
+  const secret = cfg('NPM_PASSWORD');
+  if (!identity || !secret) {
+    return { error: 'NPM is not configured (Settings → Nginx Proxy Manager: URL, email, password).' };
+  }
+  const key = `${base}|${identity}`;
+  if (!force && npmJwt && npmJwt.key === key && npmJwt.exp - Date.now() > 60_000) return npmJwt.token;
+  const res = await labFetch(`${base}/api/tokens`, { method: 'POST', body: { identity, secret }, verifyTls });
+  const data = (res?.data ?? {}) as { token?: string; expires?: string };
+  if (!res || !res.ok || !data.token) {
+    npmJwt = null;
+    return {
+      error: res
+        ? `NPM login failed (HTTP ${res.status}) — check the agent user's email/password in Settings.`
+        : 'NPM did not respond.',
+    };
+  }
+  const exp = data.expires ? Date.parse(data.expires) : NaN;
+  npmJwt = { token: data.token, exp: Number.isFinite(exp) ? exp : Date.now() + 3_600_000, key };
+  return data.token;
+}
+
+async function npmRequest(method: LabMethod, rawPath: string, body?: unknown): Promise<{ ok: boolean; detail: string }> {
+  const host = cfg('NPM_HOST');
+  if (!host) return { ok: false, detail: 'NPM is not configured (Settings → Nginx Proxy Manager: URL, email, password).' };
+  const base = trimSlash(host);
+  const verifyTls = envBool(cfg('NPM_VERIFY_TLS'));
+  let p = rawPath.trim();
+  if (!p.startsWith('/')) p = '/' + p;
+  if (!p.startsWith('/api/')) p = '/api' + p;
+  for (const force of [false, true]) {
+    const token = await npmToken(base, verifyTls, force);
+    if (typeof token !== 'string') return { ok: false, detail: token.error };
+    const res = await labFetch(`${base}${p}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}` },
+      verifyTls,
+      ...(body != null ? { body } : {}),
+    });
+    if (res && res.status === 401 && !force) continue; // JWT expired early — log in again once
+    return restOutcome('NPM', method, p, res);
+  }
+  return { ok: false, detail: 'NPM rejected the agent login.' };
 }

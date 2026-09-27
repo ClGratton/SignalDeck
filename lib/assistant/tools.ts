@@ -28,6 +28,7 @@ import {
   type GuestPowerAction,
   type LabService,
 } from '@/lib/console';
+import { LAB_METHODS, type LabMethod } from '@/lib/homelab';
 import { getTrafficSeries } from '@/lib/cloudflare';
 import { getHistoryRecord } from '@/lib/history-store';
 import { buildServiceHistories } from '@/lib/history';
@@ -328,7 +329,10 @@ const ACTION_TOOLS: ToolDef[] = [
       '- service "homeassistant": a path STARTING WITH "/" is REST under /api/ (e.g. GET /api/error_log; GET /api/config/config_entries; GET /api/history/period/{ts}). A path WITHOUT a leading slash is a WebSocket command type — the ONLY way to touch the entity/device registry. e.g. path "config/entity_registry/remove" body {"entity_id":"sensor.x"} removes one orphaned entity; "config/entity_registry/list", "config/device_registry/remove_config_entry". The server calls HA directly with its own token — never shell into the HA container to do this.\n' +
       '- service "truenas": TrueNAS SCALE JSON-RPC 2.0 (no REST). Put the RPC METHOD in `path` (e.g. "pool.dataset.query", "app.start", "replication.run") and its params array in `body`.\n' +
       '- service "jellyfin": Jellyfin REST. e.g. GET /Sessions, GET /System/Info, POST /Items/{id}/... `path` is the endpoint.\n' +
-      '- service "cloudflare": Cloudflare REST under /client/v4 (auto-prefixed). e.g. GET /client/v4/zones/{zone}/dns_records.\n' +
+      '- service "cloudflare": Cloudflare REST under /client/v4 (auto-prefixed). e.g. GET /client/v4/zones/{zone}/dns_records; POST/PATCH/DELETE dns_records to manage DNS (writes use a separate write token).\n' +
+      '- service "coolify": Coolify REST under /api/v1 (auto-prefixed). e.g. GET /applications, GET /deploy?uuid={uuid}, PATCH /applications/{uuid}.\n' +
+      '- service "npm": Nginx Proxy Manager REST under /api (auto-prefixed; login handled server-side). e.g. GET /nginx/proxy-hosts, POST /nginx/proxy-hosts, GET /nginx/certificates.\n' +
+      'Call read_reference("apis") for the cheatsheet; the edge backends (coolify/npm/cloudflare writes) can be switched off by the owner — the result says so.\n' +
       'The system applies the operator\'s approval and returns the REAL result (HTTP status / RPC result, or 403 when the token lacks permission — then name the role/scope to grant).',
     input_schema: {
       type: 'object',
@@ -336,7 +340,7 @@ const ACTION_TOOLS: ToolDef[] = [
         service: { type: 'string', enum: [...LAB_SERVICES] },
         method: {
           type: 'string',
-          enum: ['GET', 'POST', 'PUT', 'DELETE'],
+          enum: [...LAB_METHODS],
           description: 'HTTP verb. For truenas (JSON-RPC) this is ignored — use GET for reads, POST for calls.',
         },
         path: {
@@ -838,7 +842,7 @@ export async function executeTool(
       const path = str(args.path);
       const summary = str(args.summary) || `${service} ${method} ${path}`;
       const body = args.body !== undefined ? args.body : undefined;
-      if (!LAB_SERVICES.includes(service) || !['GET', 'POST', 'PUT', 'DELETE'].includes(method) || !path) {
+      if (!LAB_SERVICES.includes(service) || !(LAB_METHODS as string[]).includes(method) || !path) {
         return { content: 'Invalid lab_request arguments (service, method, path required).', isError: true };
       }
       return dispatchAction(
@@ -846,7 +850,7 @@ export async function executeTool(
           title: summary,
           detail: `${service}: ${method} ${path}${body !== undefined ? ` ${JSON.stringify(body).slice(0, 120)}` : ''}`,
           critical: labRequestCritical(service, method, path),
-          run: () => labRequest(service, method as 'GET' | 'POST' | 'PUT' | 'DELETE', path, body),
+          run: () => labRequest(service, method as LabMethod, path, body),
         },
         ctx,
       );

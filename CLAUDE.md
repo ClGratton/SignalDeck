@@ -38,7 +38,10 @@ The backend tokens come in two tiers, chosen per CODE PATH (not per file):
   `*_AGENT` is unset. Set these to a write-capable token so the agent can manage
   the lab. The auth builders are scoped: `pveAuth('read'|'agent')`,
   `haAuth('read'|'agent')`; TrueNAS-RPC / HA-WebSocket / SSH agent calls use
-  `cfgAgent`. SSH is agent-only already; Jellyfin/Cloudflare stay single-key.
+  `cfgAgent`. SSH is agent-only already; Jellyfin stays single-key. Cloudflare
+  is two-tier: READS use `CLOUDFLARE_API_TOKEN` (also the public traffic
+  chart), WRITES use `CLOUDFLARE_API_TOKEN_AGENT`. Coolify and NPM credentials
+  exist ONLY on the agent path (see "Edge backends" below).
 
 Both tiers live in the same gitignored store — co-location is fine; the
 separation that matters is that a bug in the read path can never reach the write
@@ -172,6 +175,25 @@ no-approval path to anything else. What MUST hold instead:
   token or hash after minting.
 - **Audit, not approval**: every tool call is appended to `data/agent-audit.json`
   (`lib/agent-audit.ts`, bounded) with token name, tool, clipped request, ok, ms.
+
+### Edge backends for BOTH agents — Coolify, NPM, Cloudflare write (owner decision)
+
+OWNER DECISION (2026-09-27, explicit, after being shown the risk): the agents —
+the dashboard assistant AND external Claude Code / Codex — must be able to
+manage the public edge themselves: **Coolify** (deploys/apps, REST API token),
+**Nginx Proxy Manager** (proxy hosts / certificates, via a dedicated NPM user's
+email+password → short-lived JWT, `npmRequest()`), and **Cloudflare WRITE** (DNS
+etc., `CLOUDFLARE_API_TOKEN_AGENT` via `cfgAgent`; the traffic chart keeps the
+read-only `CLOUDFLARE_API_TOKEN`). They are ordinary `lab_request` services, so
+they get exactly the approval each path already has (dashboard modes + risk
+classification + destructive re-auth gate; external agents = their own
+ask/auto) — nothing extra. The only added control is a per-backend Settings
+kill switch, DEFAULT ON (`AGENT_ALLOW_COOLIFY`, `AGENT_ALLOW_NPM`,
+`AGENT_ALLOW_CLOUDFLARE_WRITE`); its state is TOLD to both agents
+(`labBackendStatus()` in the dashboard prompt and the MCP instructions) and a
+disabled backend refuses with an explicit "disabled in Settings" result. Keep
+the credentials server-only (NPM password and Coolify token are agent-only
+fields, never on the read/display path).
 
 ### Operator assistant (console sidebar)
 

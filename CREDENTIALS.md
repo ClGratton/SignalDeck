@@ -19,7 +19,9 @@ the assistant needs to perform the confirmed proposals.
 | **Home Assistant** | `HOMEASSISTANT_TOKEN` | any long-lived token can read `/api/states` | a token minted by an **admin** user can call services (`light.turn_off`, etc.) — non-admin tokens 403 on service calls |
 | **TrueNAS** | `TRUENAS_API_KEY` | a "Readonly Admin"-role key reads pools/datasets/temps | no write actions are wired yet; a future action tool would need a `FULL_ADMIN`/write-role key |
 | **Jellyfin** | `JELLYFIN_API_KEY` | server API key reads sessions | no action tools wired |
-| **Cloudflare** | `CLOUDFLARE_API_TOKEN` | `Zone → Analytics → Read` | read-only; no actions |
+| **Cloudflare** | `CLOUDFLARE_API_TOKEN` (read) + `CLOUDFLARE_API_TOKEN_AGENT` (write) | read token: `Zone → Analytics → Read` (traffic chart) | write token: `Zone → DNS → Edit` + `Zone → Zone → Read` (optionally `Account → Access: Apps and Policies → Edit`). Switch: `AGENT_ALLOW_CLOUDFLARE_WRITE` |
+| **Coolify** | `COOLIFY_HOST` + `COOLIFY_API_TOKEN` | — (agent-only) | Coolify → Settings → Advanced → **API Access** on; then Keys & Tokens → **API Tokens** → token with `root` (or `read`+`write`+`deploy`). Switch: `AGENT_ALLOW_COOLIFY` |
+| **Nginx Proxy Manager** | `NPM_HOST` + `NPM_EMAIL` + `NPM_PASSWORD` | — (agent-only) | NPM has no API keys: create a **dedicated NPM user** (Users → Add) with manage permission on Proxy Hosts / Certificates (not your admin account); the dashboard logs in with it. Switch: `AGENT_ALLOW_NPM` |
 | **SSH (run_shell)** | `SSH_HOST/PORT/USER/PASSWORD or PRIVATE_KEY` | — | shell on the host for what REST can't do (`pct exec`, logs); point at the Proxmox node. A user that can run `pct`/`qm` (root) reaches every guest. Always confirm-gated. |
 
 ## What to change for the assistant to actually act
@@ -42,9 +44,14 @@ the assistant needs to perform the confirmed proposals.
    **admin** user (Profile → Long-lived access tokens). That single token both
    reads states and calls services.
 
-3. **TrueNAS / Jellyfin / Cloudflare.** No elevation needed today — they have no
-   action tools. If a write tool is added later, raise the TrueNAS key's role to
-   a write role then.
+3. **TrueNAS / Jellyfin.** `lab_request` can act on them with whatever the key
+   allows; raise the TrueNAS key to a write role (`TRUENAS_API_KEY_AGENT`) when
+   you want the agent to change things.
+
+4. **Edge backends — Cloudflare writes, Coolify, NPM.** Configure them in Settings
+   (rows above). Both agents (dashboard + Claude Code/Codex) use them through
+   `lab_request` with the approval each already has; each has an on/off switch
+   in its Settings group (default on), and the agents are told which are on.
 
 ## Security note
 

@@ -65,12 +65,16 @@ export interface JsonResult {
   data: unknown;
 }
 
+/** Verbs the lab backends use (PATCH: Coolify / Cloudflare partial updates). */
+export type LabMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+export const LAB_METHODS: LabMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+
 export interface FetchOpts {
   headers?: Record<string, string>;
   /** false skips TLS verification (self-signed labs); default true. */
   verifyTls?: boolean;
   /** HTTP method; GET unless an action explicitly needs to mutate. */
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: LabMethod;
   /** JSON body for write actions. */
   body?: unknown;
   /** Form-encode the body instead of JSON (Proxmox write APIs expect this). */

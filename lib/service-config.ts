@@ -26,6 +26,8 @@ export interface ServiceField {
     | 'Jellyfin'
     | 'Home Assistant'
     | 'Cloudflare'
+    | 'Coolify'
+    | 'Nginx Proxy Manager'
     | 'Shell (SSH)'
     | 'Assistant'
     | 'Agent credentials'
@@ -69,6 +71,22 @@ export const SERVICE_FIELDS: ServiceField[] = [
   { name: 'HOMEASSISTANT_VERIFY_TLS', label: 'Verify TLS', group: 'Home Assistant', secret: false, control: 'toggle', boolDefault: true },
   { name: 'CLOUDFLARE_API_TOKEN', label: 'API token', group: 'Cloudflare', secret: true },
   { name: 'CLOUDFLARE_ZONE_ID', label: 'Zone ID', group: 'Cloudflare', secret: false },
+  // Edge backends the AGENTS manage (dashboard assistant + external agents). Each
+  // has a kill switch, default ON; its state is shown to the agents. The token
+  // above stays read-only (traffic chart); writes use the "— write" token in
+  // Agent credentials.
+  { name: 'AGENT_ALLOW_CLOUDFLARE_WRITE', label: 'Agents may change Cloudflare (DNS, …)', group: 'Cloudflare', secret: false, control: 'toggle', boolDefault: true },
+  { name: 'COOLIFY_HOST', label: 'URL', group: 'Coolify', secret: false, placeholder: 'http://10.0.0.5:8000' },
+  { name: 'COOLIFY_API_TOKEN', label: 'API token', group: 'Coolify', secret: true, privilegedForActions: true },
+  { name: 'COOLIFY_VERIFY_TLS', label: 'Verify TLS', group: 'Coolify', secret: false, control: 'toggle', boolDefault: true },
+  { name: 'AGENT_ALLOW_COOLIFY', label: 'Agents may use Coolify', group: 'Coolify', secret: false, control: 'toggle', boolDefault: true },
+  // NPM has no API keys — the agents log in as a DEDICATED NPM user (create one
+  // in NPM → Users with the permissions they need; not your admin account).
+  { name: 'NPM_HOST', label: 'Admin URL', group: 'Nginx Proxy Manager', secret: false, placeholder: 'http://10.0.0.6:81' },
+  { name: 'NPM_EMAIL', label: 'Agent user email', group: 'Nginx Proxy Manager', secret: false, privilegedForActions: true },
+  { name: 'NPM_PASSWORD', label: 'Agent user password', group: 'Nginx Proxy Manager', secret: true, privilegedForActions: true },
+  { name: 'NPM_VERIFY_TLS', label: 'Verify TLS', group: 'Nginx Proxy Manager', secret: false, control: 'toggle', boolDefault: true },
+  { name: 'AGENT_ALLOW_NPM', label: 'Agents may use Nginx Proxy Manager', group: 'Nginx Proxy Manager', secret: false, control: 'toggle', boolDefault: true },
   // SSH gives the assistant shell access for what the REST APIs can't do (exec
   // into containers, read logs). Point it at the ENTRY Proxmox node; `pct exec`
   // only reaches guests on that node, so for a multi-node cluster the assistant
@@ -106,6 +124,7 @@ export const SERVICE_FIELDS: ServiceField[] = [
   { name: 'PROXMOX_TOKEN_SECRET_AGENT', label: 'Proxmox token secret — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
   { name: 'TRUENAS_API_KEY_AGENT', label: 'TrueNAS API key — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
   { name: 'HOMEASSISTANT_TOKEN_AGENT', label: 'Home Assistant token — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
+  { name: 'CLOUDFLARE_API_TOKEN_AGENT', label: 'Cloudflare API token — write', group: 'Agent credentials', secret: true, privilegedForActions: true },
   // Login + session policy (enforced by lib/session-store.ts). All non-secret.
   // 2FA toggle gates the LOGIN code only (re-auth gates for destructive actions
   // are unaffected). Idle = rolling timeout that active use keeps refreshing;

@@ -21,11 +21,13 @@ import {
   getConsoleSnapshot,
   haCallService,
   labRequest,
+  labBackendStatus,
   proxmoxGuestPower,
   LAB_SERVICES,
   type GuestPowerAction,
   type LabService,
 } from '@/lib/console';
+import { LAB_METHODS, type LabMethod } from '@/lib/homelab';
 import { getTrafficSeries } from '@/lib/cloudflare';
 import { sshConfigured, sshRun } from '@/lib/ssh';
 import { addMemory, deleteMemory, listMemories, updateMemory } from '@/lib/assistant/memory';
@@ -62,17 +64,17 @@ const LAB_REQUEST_PROPS = {
   service: { type: 'string', enum: [...LAB_SERVICES] },
   method: {
     type: 'string',
-    enum: ['GET', 'POST', 'PUT', 'DELETE'],
+    enum: [...LAB_METHODS],
     description: 'HTTP verb. For truenas (JSON-RPC) use GET for reads, POST for calls.',
   },
   path: {
     type: 'string',
     description:
-      'Endpoint for the service (proxmox: under /api2/json; homeassistant: "/api/..." REST, or a WebSocket command type with NO leading slash e.g. "config/entity_registry/list"; cloudflare: /client/v4/...), or the JSON-RPC method name for truenas.',
+      'Endpoint for the service (proxmox: under /api2/json; homeassistant: "/api/..." REST, or a WebSocket command type with NO leading slash e.g. "config/entity_registry/list"; cloudflare: /client/v4/...; coolify: /api/v1/... e.g. /applications; npm (Nginx Proxy Manager): /api/... e.g. /nginx/proxy-hosts), or the JSON-RPC method name for truenas.',
   },
   body: {
     description:
-      'Optional payload: form params object (proxmox), JSON body (homeassistant/jellyfin/cloudflare), or the positional params ARRAY for truenas (e.g. [[]] for a query).',
+      'Optional payload: form params object (proxmox), JSON body (homeassistant/jellyfin/cloudflare/coolify/npm), or the positional params ARRAY for truenas (e.g. [[]] for a query).',
   },
 };
 
@@ -235,17 +237,18 @@ export const MCP_TOOLS: McpTool[] = [
 // Whatever doesn't fit is one list_memory away.
 const INSTRUCTIONS_BUDGET = 2000;
 const INSTRUCTIONS_BASE =
-  'Direct access to this homelab (Proxmox, TrueNAS, Home Assistant, Jellyfin, Cloudflare, SSH) through the Grtlabs dashboard, which holds the credentials. ' +
+  'Direct access to this homelab (Proxmox, TrueNAS, Home Assistant, Jellyfin, Cloudflare, Coolify, Nginx Proxy Manager, SSH) through the Grtlabs dashboard, which holds the credentials. ' +
   'Calls execute immediately — there is no confirmation on the server; your own permission mode is the approval. ' +
   'Read with lab_get, act with lab_request / run_shell / guest_power / ha_service; read_reference("apis"|"ssh"|"memory") before an unfamiliar backend. ' +
   'The lab memory below is shared with the dashboard assistant: trust it until reality contradicts it, then fix it (update_memory / forget_memory); save durable lab facts only (save_memory).';
 
 export function mcpInstructions(): string {
+  const head = `${INSTRUCTIONS_BASE}\n\n${labBackendStatus()}`;
   const notes = listMemories();
   if (notes.length === 0) {
-    return `${INSTRUCTIONS_BASE}\n\nLab memory is empty — build the lab map from lab_get proxmox GET /cluster/resources and save it (read_reference("memory")).`;
+    return `${head}\n\nLab memory is empty — build the lab map from lab_get proxmox GET /cluster/resources and save it (read_reference("memory")).`;
   }
-  let out = `${INSTRUCTIONS_BASE}\n\nLab memory ([id] for update_memory/forget_memory):`;
+  let out = `${head}\n\nLab memory ([id] for update_memory/forget_memory):`;
   let shown = 0;
   for (const n of notes) {
     const line = `\n- [${n.id.slice(0, 8)}] ${n.text}`;
@@ -294,13 +297,13 @@ export async function callMcpTool(name: string, args: Record<string, unknown>): 
       const service = str(args.service) as LabService;
       const method = str(args.method).toUpperCase();
       const path = str(args.path);
-      if (!LAB_SERVICES.includes(service) || !['GET', 'POST', 'PUT', 'DELETE'].includes(method) || !path) {
+      if (!LAB_SERVICES.includes(service) || !(LAB_METHODS as string[]).includes(method) || !path) {
         return text('Invalid arguments (service, method, path required).', true);
       }
       if (name === 'lab_get' && !isReadOnlyLabRequest(service, method, path)) {
         return text('lab_get only performs reads. Use lab_request for writes/actions.', true);
       }
-      return outcome(await labRequest(service, method as 'GET' | 'POST' | 'PUT' | 'DELETE', path, args.body));
+      return outcome(await labRequest(service, method as LabMethod, path, args.body));
     }
 
     case 'run_shell': {

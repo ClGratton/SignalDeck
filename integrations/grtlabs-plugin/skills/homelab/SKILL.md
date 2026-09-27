@@ -21,7 +21,7 @@ accurate for both of you.
 
 Read (pre-approved while this skill is active):
 - `get_console_snapshot`: whole-lab state. Nodes, every VM/CT (name, vmid, node, status, load), pools / datasets / disk temps, Jellyfin sessions, and a preview of the Home Assistant entities. Pass `fresh: true` to bypass the ~10 s cache.
-- `lab_get`: any READ on any backend (`service`: proxmox | homeassistant | truenas | jellyfin | cloudflare). It refuses writes.
+- `lab_get`: any READ on any backend (`service`: proxmox | homeassistant | truenas | jellyfin | cloudflare | coolify | npm). It refuses writes. `coolify` is the deploy platform (apps, deployments), `npm` is Nginx Proxy Manager (proxy hosts, certificates).
 - `list_ha_entities`: the full Home Assistant registry with states, filtered by `domain` and/or `query`.
 - `get_service_history`: uptime history. `get_traffic`: Cloudflare request rates.
 - `read_reference`: the manual. `"apis"` is the endpoint cheatsheet per backend, `"ssh"` covers pct exec and the multi-node rules, `"memory"` covers maintaining the lab map.
@@ -47,7 +47,8 @@ Change things (your permission mode decides):
 5. **Before a restart, check who is using it.** For example, check the Jellyfin sessions in the snapshot. If someone is watching or listening, ask the operator first.
 6. **Back up small config/state files before editing them**, and say where the backup is.
 7. **Verify after acting.** Re-read the state (`fresh: true`) and report the real result: the HTTP status, RPC result or command output. Never report an assumed one.
-8. **Auth limits are limits.** A 403 means the dashboard's agent credential lacks that permission: name the role or scope to grant. On a 401, stop and report it. Never try to extract, forge or recover tokens from internal files.
-9. **Memory discipline.** Save only durable lab facts (topology, quirks, discovered entity ids), one per note, under 300 characters. Never save secrets or details of the current task; those stay in your own session. When a note turns out wrong, fix it with `update_memory` or remove it with `forget_memory`.
+8. **Edge backends can be switched off.** The server instructions have an "Edge backends" line saying whether coolify, npm and cloudflare writes are available, disabled by the owner, or not configured yet. A disabled one refuses and says so. Tell the operator; don't route around it (e.g. via SSH into the proxy host).
+9. **Auth limits are limits.** A 403 means the dashboard's agent credential lacks that permission: name the role or scope to grant. On a 401, stop and report it. Never try to extract, forge or recover tokens from internal files.
+10. **Memory discipline.** Save only durable lab facts (topology, quirks, discovered entity ids), one per note, under 300 characters. Never save secrets or details of the current task; those stay in your own session. When a note turns out wrong, fix it with `update_memory` or remove it with `forget_memory`.
 
 Output over ~4000 characters is truncated server-side. Narrow the query instead: filters, specific endpoints, `| tail`.

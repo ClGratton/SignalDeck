@@ -44,7 +44,23 @@ WebSocket (path has NO leading slash = the command type, body = the rest of the 
 - GET /System/Info , GET /Sessions , GET /Items?... , POST /Items/{id}/...
 
 ## cloudflare  (REST, /client/v4)
-- GET /client/v4/zones/{zone}/dns_records , PATCH .../dns_records/{id}`;
+- GET /client/v4/zones?name={domain} → zone id ; GET /client/v4/zones/{zone}/dns_records?name={fqdn}
+- POST .../dns_records  body {"type":"A"|"CNAME"|…,"name":"{fqdn}","content":"{target}","proxied":true,"ttl":1} ; PATCH/DELETE .../dns_records/{id}
+- Reads use a read-only token; WRITES use a separate write token and can be switched off by the owner (the result says so). A 403 on a write = the write token lacks that permission (name it, e.g. Zone → DNS → Edit).
+
+## coolify  (REST, /api/v1 — auto-prefixed; Bearer token)
+- Discover: GET /servers , GET /projects (→ project uuid + environments) , GET /applications , GET /applications/{uuid}
+- Deploy / lifecycle: GET /deploy?uuid={app_uuid}&force=false ; GET /applications/{uuid}/start|stop|restart ; GET /deployments , GET /deployments/{deployment_uuid} (status + logs)
+- Create from git: POST /applications/public (public repo) or /applications/private-github-app (with github_app_uuid; GET /github-apps lists them) — body needs project_uuid, server_uuid, environment_name, git_repository, git_branch, build_pack ("nixpacks"|"dockerfile"|"static"…), ports_exposes, and domains.
+- Update: PATCH /applications/{uuid} (e.g. domains, build settings) ; env vars: GET/POST/PATCH /applications/{uuid}/envs
+- A 401/403 usually means API access is off in Coolify or the token lacks the scope (read/write/deploy/root).
+
+## npm  (Nginx Proxy Manager REST, /api — auto-prefixed; the server logs in and renews the session)
+- GET /nginx/proxy-hosts?expand=certificate,access_list ; GET /nginx/certificates ; GET /nginx/access-lists
+- POST /nginx/proxy-hosts body {"domain_names":["{fqdn}"],"forward_scheme":"http"|"https","forward_host":"{ip}","forward_port":{port},"certificate_id":{id}|0,"ssl_forced":true,"http2_support":true,"block_exploits":true,"allow_websocket_upgrade":true,"access_list_id":0,"meta":{},"advanced_config":"","locations":[]} ; PUT/DELETE /nginx/proxy-hosts/{id}
+- Certificates: reuse an existing wildcard (certificate_id) when one covers the name; else POST /nginx/certificates {"provider":"letsencrypt","domain_names":[…],"meta":{…}}.
+- If the proxy runs as an HA pair, make changes on the PRIMARY (the memory says which) — the standby follows by replication.
+- The edge backends can be switched off by the owner; a disabled one refuses with a message saying so.`;
 
 const SSH = `# run_shell — shell access over SSH
 

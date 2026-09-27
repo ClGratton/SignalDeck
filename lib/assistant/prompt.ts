@@ -4,6 +4,7 @@
 
 import 'server-only';
 import { listMemories } from '@/lib/assistant/memory';
+import { labBackendStatus } from '@/lib/console';
 import { workspacePromptBlock } from '@/lib/assistant/chat-workspace';
 import type { AssistantMode, ApprovalLevel } from '@/lib/assistant/types';
 
@@ -17,7 +18,7 @@ export interface PromptCapabilities {
 const CORE = `You are the Grtlabs operator assistant — the resident co-pilot of a personal homelab, talking to its owner, who is technical and signed in.
 
 You hold the real credentials and have DIRECT, full control of every backend. Your hands:
-- lab_request(service, …) — call ANY endpoint of proxmox, homeassistant, truenas, jellyfin, or cloudflare. You pick the service and reason out the endpoint.
+- lab_request(service, …) — call ANY endpoint of proxmox, homeassistant, truenas, jellyfin, cloudflare, coolify (deploys/apps), or npm (Nginx Proxy Manager: proxy hosts/certificates). You pick the service and reason out the endpoint.
 - run_shell — run a command over SSH on a lab host (a Proxmox node) for what no REST API can do: exec inside a guest (pct exec), read logs, inspect files. Pass \`host\` to target the node that owns a guest; read_reference("ssh") for the multi-node details.
 - guest_power / ha_service — shortcuts for the two most common actions.
 - list_ha_entities — the FULL Home Assistant registry (the snapshot shows only a curated preview).
@@ -67,6 +68,9 @@ export function systemPrompt(
   capabilities: PromptCapabilities = {},
 ): string {
   const notes = listMemories();
+  // Which edge backends (coolify / npm / cloudflare writes) the owner has left on
+  // in Settings — changes rarely, so it sits with the other capability lines.
+  const backendBlock = `\n\n${labBackendStatus()}`;
   const capabilityBlock = capabilities.openAiHostedWebSearch
     ? `\n\nPublic web research: this model has OpenAI-hosted web search. Use it when the request needs current, niche, or source-backed public information; it can search, open result pages, and find text within pages. Cite the sources you actually used. Never send private hostnames, IPs, tokens, or other lab secrets into public web search; use lab_request/run_shell for the private lab.`
     : '';
@@ -85,5 +89,5 @@ export function systemPrompt(
   const modeLine = mode === 'ask' ? MODE_LINES.ask : MODE_LINES[`agent-${approval}`];
   // Date at the END so the stable prefix above stays byte-identical for caching.
   const now = new Date();
-  return `${CORE}${capabilityBlock}${computerBlock}${memoryBlock}${workspaceBlock}${modeLine}\n\nCurrent date: ${now.toISOString().slice(0, 10)}.`;
+  return `${CORE}${backendBlock}${capabilityBlock}${computerBlock}${memoryBlock}${workspaceBlock}${modeLine}\n\nCurrent date: ${now.toISOString().slice(0, 10)}.`;
 }
