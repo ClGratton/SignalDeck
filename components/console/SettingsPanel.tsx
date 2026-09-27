@@ -12,6 +12,7 @@ import { Eye, EyeOff, ShieldAlert, X } from 'lucide-react';
 import { useReveal } from './RevealProvider';
 import { AssistantSettings } from './AssistantSettings';
 import { SessionsSettings } from './SessionsSettings';
+import { AgentAccessSettings } from './AgentAccessSettings';
 import styles from './settings.module.css';
 
 interface FieldDto {
@@ -323,6 +324,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 />
               ) : null}
               {active === 'Security & sessions' ? <SessionsSettings /> : null}
+              {active === 'Agent access' ? <AgentAccessSettings /> : null}
             </div>
           </div>
         )}

@@ -484,6 +484,70 @@ function isHighRiskAction(detail: string): boolean {
   return HIGH_RISK.test(detail);
 }
 
+// ── Shared helpers (also used by the external-agent MCP surface, lib/agent-mcp.ts) ──
+
+/** A lab_request that is clearly a READ (the ones "critical" mode auto-runs). */
+export function isReadOnlyLabRequest(service: LabService, method: string, path: string): boolean {
+  return !labRequestCritical(service, method, path);
+}
+
+/** The agent targets the node that owns a guest by NAME (from its lab map), but a
+ *  Proxmox node's short hostname rarely resolves from here. If `host` is a bare
+ *  node name, map it to that node's cluster IP so reaching the right node just
+ *  works instead of failing back to the entry node. An IP or dotted host is used
+ *  as-is; empty means the configured entry host. */
+export async function resolveShellHost(host: string): Promise<string | undefined> {
+  let target = host || undefined;
+  if (target && !/^\d{1,3}(\.\d{1,3}){3}$/.test(target) && !target.includes('.')) {
+    const ip = await proxmoxNodeAddress(target);
+    if (ip) target = ip;
+  }
+  return target;
+}
+
+/** The full HA entity registry as text lines, filtered by domain and/or a
+ *  substring of the id/friendly name. Null when HA is unconfigured/unreachable. */
+export async function haEntitiesText(domainFilter: string, queryFilter: string): Promise<string | null> {
+  const states = await haListStates();
+  if (!states) return null;
+  const domain = domainFilter.toLowerCase();
+  const query = queryFilter.toLowerCase();
+  const rows = states
+    .filter((s) => !domain || s.entity_id.startsWith(domain + '.'))
+    .filter(
+      (s) =>
+        !query ||
+        s.entity_id.toLowerCase().includes(query) ||
+        (s.attributes?.friendly_name ?? '').toLowerCase().includes(query),
+    )
+    .slice(0, 300)
+    .map((s) => {
+      const unit = s.attributes?.unit_of_measurement;
+      const friendly = s.attributes?.friendly_name;
+      return `${s.entity_id} = ${s.state}${unit ? ' ' + unit : ''}${friendly ? `  (${friendly})` : ''}`;
+    });
+  return rows.length > 0 ? rows.join('\n') : 'No entities matched.';
+}
+
+/** One month of recorded per-service daily health as text. Null on a bad
+ *  year/month; defaults to the current month. */
+export function serviceHistoryText(yearArg: unknown, monthArg: unknown): string | null {
+  const now = new Date();
+  const year = Number.isInteger(yearArg) ? (yearArg as number) : now.getFullYear();
+  const month1 = Number.isInteger(monthArg) ? (monthArg as number) : now.getMonth() + 1;
+  if (year < 2020 || year > now.getFullYear() || month1 < 1 || month1 > 12) return null;
+  const today = { y: now.getFullYear(), m: now.getMonth(), d: now.getDate() };
+  const histories = buildServiceHistories(year, month1 - 1, today, getHistoryRecord());
+  const lines = histories.map((h) => {
+    const days = h.days
+      .filter((d) => d.level !== 'future')
+      .map((d) => `${d.day}:${d.level}`)
+      .join(' ');
+    return `${h.label}: uptime ${h.uptimePct}% · ${h.incidents} incident day(s) · streak ${h.streakDays}d\n  ${days}`;
+  });
+  return lines.join('\n') || 'No history recorded for that month.';
+}
+
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const int = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) ? v : NaN);
 
@@ -620,46 +684,15 @@ export async function executeTool(
     }
 
     case 'list_ha_entities': {
-      const states = await haListStates();
-      if (!states) return { content: 'Home Assistant is not configured or unreachable.', isError: true };
-      const domain = str(args.domain).toLowerCase();
-      const query = str(args.query).toLowerCase();
-      const rows = states
-        .filter((s) => !domain || s.entity_id.startsWith(domain + '.'))
-        .filter(
-          (s) =>
-            !query ||
-            s.entity_id.toLowerCase().includes(query) ||
-            (s.attributes?.friendly_name ?? '').toLowerCase().includes(query),
-        )
-        .slice(0, 300)
-        .map((s) => {
-          const unit = s.attributes?.unit_of_measurement;
-          const friendly = s.attributes?.friendly_name;
-          return `${s.entity_id} = ${s.state}${unit ? ' ' + unit : ''}${friendly ? `  (${friendly})` : ''}`;
-        });
-      return {
-        content: rows.length > 0 ? rows.join('\n') : 'No entities matched.',
-      };
+      const text = await haEntitiesText(str(args.domain), str(args.query));
+      return text == null
+        ? { content: 'Home Assistant is not configured or unreachable.', isError: true }
+        : { content: text };
     }
 
     case 'get_service_history': {
-      const now = new Date();
-      const year = Number.isInteger(args.year) ? (args.year as number) : now.getFullYear();
-      const month1 = Number.isInteger(args.month) ? (args.month as number) : now.getMonth() + 1;
-      if (year < 2020 || year > now.getFullYear() || month1 < 1 || month1 > 12) {
-        return { content: 'Invalid year/month.', isError: true };
-      }
-      const today = { y: now.getFullYear(), m: now.getMonth(), d: now.getDate() };
-      const histories = buildServiceHistories(year, month1 - 1, today, getHistoryRecord());
-      const lines = histories.map((h) => {
-        const days = h.days
-          .filter((d) => d.level !== 'future')
-          .map((d) => `${d.day}:${d.level}`)
-          .join(' ');
-        return `${h.label}: uptime ${h.uptimePct}% · ${h.incidents} incident day(s) · streak ${h.streakDays}d\n  ${days}`;
-      });
-      return { content: lines.join('\n') || 'No history recorded for that month.' };
+      const text = serviceHistoryText(args.year, args.month);
+      return text == null ? { content: 'Invalid year/month.', isError: true } : { content: text };
     }
 
     case 'get_traffic': {
@@ -755,19 +788,7 @@ export async function executeTool(
           // Read-only commands auto-run in "critical" mode; only ones that
           // delete/overwrite files or stop/destroy a service or guest confirm.
           critical: shellCommandCritical(command),
-          run: async () => {
-            // The agent targets the node that owns a guest by NAME (from its lab
-            // map), but a Proxmox node's short hostname rarely resolves from here.
-            // If `host` is a bare node name, map it to that node's cluster IP so
-            // reaching the right node just works instead of failing back to the
-            // entry node. An IP or dotted host is used as-is.
-            let target = host || undefined;
-            if (target && !/^\d{1,3}(\.\d{1,3}){3}$/.test(target) && !target.includes('.')) {
-              const ip = await proxmoxNodeAddress(target);
-              if (ip) target = ip;
-            }
-            return sshRun(command, target);
-          },
+          run: async () => sshRun(command, await resolveShellHost(host)),
         },
         ctx,
       );

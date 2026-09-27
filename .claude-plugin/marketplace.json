@@ -1,0 +1,11 @@
+{
+  "name": "grtlabs",
+  "owner": { "name": "ClGratton" },
+  "plugins": [
+    {
+      "name": "grtlabs",
+      "source": "./integrations/grtlabs-plugin",
+      "description": "Direct access to the Grtlabs homelab (Proxmox, TrueNAS, Home Assistant, Jellyfin, Cloudflare, SSH) over the dashboard's LAN-only MCP endpoint."
+    }
+  ]
+}

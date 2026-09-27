@@ -1,0 +1,6 @@
+{
+  "name": "grtlabs",
+  "version": "1.0.0",
+  "description": "Grtlabs homelab tools (LAN-only MCP) plus the skill that knows how to use them.",
+  "author": { "name": "ClGratton" }
+}

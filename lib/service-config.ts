@@ -29,7 +29,8 @@ export interface ServiceField {
     | 'Shell (SSH)'
     | 'Assistant'
     | 'Agent credentials'
-    | 'Security & sessions';
+    | 'Security & sessions'
+    | 'Agent access';
   secret: boolean; // masked in the UI; revealed only after re-auth
   placeholder?: string;
   /** True for the credentials the assistant needs ELEVATED to ACT (see CREDENTIALS.md). */
@@ -113,6 +114,14 @@ export const SERVICE_FIELDS: ServiceField[] = [
   { name: 'AUTH_SESSION_IDLE_MINUTES', label: 'Idle timeout', group: 'Security & sessions', secret: false, control: 'slider', min: 0, max: 240, step: 5, unit: 'min', numDefault: 0, zeroLabel: 'off' },
   { name: 'AUTH_SESSION_MAX_HOURS', label: 'Max session age', group: 'Security & sessions', secret: false, control: 'slider', min: 1, max: 336, step: 1, unit: 'h', numDefault: 168 },
   { name: 'AUTH_MAX_SESSIONS', label: 'Max concurrent sessions', group: 'Security & sessions', secret: false, control: 'slider', min: 0, max: 10, step: 1, numDefault: 0, zeroLabel: 'unlimited' },
+  // External agents (Claude Code / Codex on your desktops) calling the lab tools
+  // over the LAN-only MCP endpoint (/api/agent/mcp) with per-desktop tokens.
+  // No dashboard approval on that path — the agent's own permission mode is the
+  // approval. The switch is a kill switch; the URL is what the setup snippets
+  // tell desktops to use; the networks are where requests may come from.
+  { name: 'AGENT_MCP_ENABLED', label: 'Allow external agents', group: 'Agent access', secret: false, control: 'toggle', boolDefault: true },
+  { name: 'AGENT_MCP_URL', label: 'LAN endpoint URL (for the setup snippets)', group: 'Agent access', secret: false, placeholder: 'http://192.168.1.10/api/agent/mcp' },
+  { name: 'AGENT_MCP_ALLOWED_NETWORKS', label: 'Allowed source networks (CIDR, blank = private ranges)', group: 'Agent access', secret: false, placeholder: '192.168.1.0/24, 10.0.0.0/8' },
 ];
 
 const FIELD_NAMES = new Set(SERVICE_FIELDS.map((f) => f.name));

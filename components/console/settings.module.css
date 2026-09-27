@@ -572,3 +572,28 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
 }
+
+/* ── Agent access tab: per-desktop setup snippets ───────────────────────────── */
+.snippet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.snippetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+.snippetCode {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-strong);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}

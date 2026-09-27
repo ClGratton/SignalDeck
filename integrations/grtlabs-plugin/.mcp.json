@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "lab": {
+      "type": "http",
+      "url": "${GRTLABS_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${GRTLABS_AGENT_TOKEN}"
+      },
+      "timeout": 600000
+    }
+  }
+}

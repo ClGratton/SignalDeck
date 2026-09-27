@@ -71,7 +71,9 @@ actions run WITHOUT re-prompting — so destroying two containers is one TOTP, n
 two. Everything NOT on the blacklist keeps its normal mode/approval behavior (the
 critical-mode classification is unchanged). Never widen the gate to swallow benign
 ops, and never resolve a `reauth` id's 'run' without verifying credentials first
-(the decide route enforces this via `isReauthRequired()`).
+(the decide route enforces this via `isReauthRequired()`). This gate governs the
+DASHBOARD assistant; external agents over `/api/agent/mcp` are an explicit
+owner-chosen exception (see "External agents" below).
 
 ### Login (`app/login/actions.ts`) — properties that must hold
 
@@ -126,7 +128,50 @@ ops, and never resolve a `reauth` id's 'run' without verifying credentials first
 - Every new privileged route MUST be covered: call `hasValidSession()` at the top
   (the matcher only covers `/dashboard`). Privileged = anything beyond the
   sanitized public aggregates, and ANY route that performs an action on the
-  homelab. The `/api/auth/handoff/redeem` route is the deliberate exception.
+  homelab. The deliberate exceptions are `/api/auth/handoff/redeem` (the handoff
+  token is the credential) and `/api/agent/mcp` (an agent token is the
+  credential; see "External agents" below).
+
+### External agents (Claude Code / Codex) — LAN-only MCP, owner-chosen, no dashboard approval
+
+OWNER DECISION (2026-09-27, explicit): Claude Code / Codex on the owner's desktop
+PCs call the lab functions directly through `/api/agent/mcp` (MCP Streamable
+HTTP, `lib/agent-mcp.ts`) with NO dashboard approval and NO TOTP re-auth — not
+even for the destructive blacklist. Those agents bring their own context,
+caching and approvals (Claude Code ask/auto, Codex approval policy); the MCP
+`readOnlyHint`/`destructiveHint` annotations and the read/write tool split
+(`lab_get` vs `lab_request`) are what feed that client-side approval. The
+re-auth gate above therefore applies to the DASHBOARD assistant only. Do not
+"fix" this by adding a server-side confirm to the MCP path; do not extend the
+no-approval path to anything else. What MUST hold instead:
+
+- **Not the harness.** The route calls the raw lab functions (`labRequest`,
+  `sshRun`, …) — no chat, task, proposal or decision machinery. Credentials stay
+  server-side (agent-tier `cfgAgent` keys via those functions); the desktop holds
+  only its agent token.
+- **LAN-only, layered** (in-app, all in `hidden()` + the Origin check in the
+  route): the `AGENT_MCP_ENABLED` kill switch (Settings → Agent access); a 404 for
+  any request carrying `cf-connecting-ip` / `cf-ray` (came through Cloudflare —
+  Cloudflare always sets them, a client can't strip them); a 404 unless EVERY
+  hop in `X-Forwarded-For` / `X-Real-IP` is inside `AGENT_MCP_ALLOWED_NETWORKS`
+  (`lib/agent-network.ts`, default private ranges — a proxy always appends the
+  real client address, so an internet request that reaches the origin WITHOUT
+  Cloudflare is refused too); a 403 for any request with an `Origin` header (CLI
+  clients send none — blocks browsers / DNS rebinding). Outside the app: a
+  Cloudflare WAF block on `/api/agent/*` and a LAN route to the app
+  (`DEPLOY-AGENT-MCP.md`). Never remove the Cloudflare-header or network checks.
+- **Memory is part of the surface**: the shared lab memory is injected into the
+  MCP `instructions` at session start (`mcpInstructions()`, ~2 KB budget, rest via
+  `list_memory`) and the memory tools are exposed — external agents and the
+  dashboard assistant maintain ONE lab map. Nothing setup-specific is hardcoded:
+  endpoint URL and networks are Settings fields; the plugin/skill are generic.
+- **Per-agent tokens** (`lib/agent-tokens.ts`, `data/agent-tokens.json`): 256-bit
+  random, stored ONLY as SHA-256, compared in constant time, shown once at mint.
+  Minting requires a session AND a fresh password + TOTP (reveal-style re-auth);
+  list/revoke are session-gated (`/api/agent/tokens`). No route ever returns a
+  token or hash after minting.
+- **Audit, not approval**: every tool call is appended to `data/agent-audit.json`
+  (`lib/agent-audit.ts`, bounded) with token name, tool, clipped request, ok, ms.
 
 ### Operator assistant (console sidebar)
 

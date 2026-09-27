@@ -1,0 +1,8 @@
+# Add to ~/.codex/config.toml on each desktop (Settings → Agent access shows this
+# block with your URL filled in). GRTLABS_AGENT_TOKEN must be set in the
+# environment Codex starts from. Also copy ../grtlabs-plugin/skills/homelab/ to
+# ~/.codex/skills/homelab/.
+[mcp_servers.grtlabs]
+url = "http://<dashboard-lan-address>/api/agent/mcp"
+bearer_token_env_var = "GRTLABS_AGENT_TOKEN"
+tool_timeout_sec = 600
