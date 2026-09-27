@@ -7,7 +7,9 @@
 FROM node:22-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+# npm's download cache survives rebuilds, so a lockfile change doesn't refetch
+# every package over a slow link.
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 # 2) build — compile the standalone server
 FROM node:22-slim AS build
@@ -31,9 +33,20 @@ ENV DISPLAY=:99
 # display. Its user-data directory lives under /app/data, so signed-in sessions
 # and the browser identity survive app restarts and deployments without baking
 # profile data or credentials into the image.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium xvfb ca-certificates fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
+#
+# Chromium + Xvfb is ~175 packages / several hundred MB. When this layer's cache
+# is invalidated (new node:22-slim digest, builder cache pruned) every deploy
+# re-downloads all of it, and a slow or flaky mirror then fails the whole
+# deploy. So: keep the downloaded .debs in BuildKit cache mounts that survive
+# layer invalidation (the slim image's docker-clean hook would delete them), and
+# let apt retry / time out per request instead of stalling on one package.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
+    && printf 'Acquire::Retries "5";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends chromium xvfb ca-certificates fonts-liberation
 
 # Next's standalone bundle (server.js + traced node_modules), static assets,
 # and the public dir. /app/data is the persistent runtime state (see compose).
