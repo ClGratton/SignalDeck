@@ -26,6 +26,7 @@ import {
   Eye,
   Globe2,
   History,
+  Image as ImageIcon,
   KeyRound,
   FileText,
   Paperclip,
@@ -57,6 +58,7 @@ import type {
 import { useReveal } from './RevealProvider';
 import { Markdown } from './Markdown';
 import { BrowserPane } from './BrowserPane';
+import { ImagePane } from './ImagePane';
 import styles from './assistant.module.css';
 
 type ProposalState = 'pending' | 'running' | 'ok' | 'fail' | 'gone';
@@ -451,6 +453,7 @@ export function AssistantSidebar({
   // we fetch it when switching chats and clear it for a fresh chat.
   const [workspace, setWorkspace] = useState<ChatWorkspaceDto | null>(null);
   const [planOpen, setPlanOpen] = useState(true);
+  const [imageVisible, setImageVisible] = useState(false);
   const [browserFrame, setBrowserFrame] = useState<BrowserFrame | null>(null);
 
   // Timer turn-state: while a SERVER-side timer runs the composer is locked (the
@@ -1377,6 +1380,7 @@ export function AssistantSidebar({
   }, [onBrowserVisibleChange]);
 
   const openBrowser = useCallback(() => {
+    setImageVisible(false);
     onBrowserVisibleChange(true);
   }, [onBrowserVisibleChange]);
 
@@ -2102,6 +2106,7 @@ export function AssistantSidebar({
 
   return (
     <>
+    <ImagePane visible={imageVisible && !browserVisible} onClose={() => setImageVisible(false)} />
     {browserVisible ? (
       <BrowserPane
         frame={browserFrame}
@@ -2129,6 +2134,11 @@ export function AssistantSidebar({
             title={browserVisible ? 'Hide browser' : 'Open browser'}
           >
             <Globe2 size={15} strokeWidth={2.2} aria-hidden />
+          </button>
+          <button type="button" className={styles.iconBtn} data-active={imageVisible || undefined}
+            onClick={() => { onBrowserVisibleChange(false); setImageVisible((v) => !v); }}
+            aria-label={imageVisible ? 'Hide image generation' : 'Open image generation'} title="Image generation">
+            <ImageIcon size={15} strokeWidth={2.2} aria-hidden />
           </button>
           <button
             type="button"
@@ -2940,9 +2950,9 @@ export function AssistantSidebar({
       <button
         type="button"
         data-surface="dashboard"
-        data-active={!browserVisible || undefined}
-        aria-pressed={!browserVisible}
-        onClick={() => onBrowserVisibleChange(false)}
+        data-active={!browserVisible && !imageVisible || undefined}
+        aria-pressed={!browserVisible && !imageVisible}
+        onClick={() => { onBrowserVisibleChange(false); setImageVisible(false); }}
       >
         Dashboard
       </button>
@@ -2955,6 +2965,9 @@ export function AssistantSidebar({
       >
         Browser
       </button>
+      <button type="button" data-surface="image" data-active={imageVisible && !browserVisible || undefined}
+        aria-pressed={imageVisible && !browserVisible}
+        onClick={() => { onBrowserVisibleChange(false); setImageVisible(true); }}>Images</button>
     </nav>
     </>
   );

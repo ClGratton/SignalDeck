@@ -5,6 +5,9 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { LoginForm } from './LoginForm';
 import styles from './login.module.css';
 
+// Auth depends on runtime secrets and the live session registry, not build-time state.
+export const dynamic = 'force-dynamic';
+
 export const metadata = {
   title: `Authenticate — ${lab.name}`,
 };

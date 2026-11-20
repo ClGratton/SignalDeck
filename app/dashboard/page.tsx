@@ -6,6 +6,9 @@ import { hasValidSession } from '@/lib/session';
 import { ConsoleShell } from '@/components/console/ConsoleShell';
 import type { AssistantProvider } from '@/lib/assistant/types';
 
+// Auth depends on runtime secrets and the live session registry, not build-time state.
+export const dynamic = 'force-dynamic';
+
 export const metadata = {
   title: `Console — ${lab.name}`,
 };

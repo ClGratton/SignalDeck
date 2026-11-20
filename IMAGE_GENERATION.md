@@ -1,0 +1,5 @@
+# Image generation configuration
+
+The authenticated Image workspace uses a private ComfyUI endpoint. Set `COMFYUI_URL` to its internal URL and, if the provider requires a bearer token, set the server-only `COMFYUI_TOKEN` or `COMFYUI_TOKEN_FILE` (a path to a file readable by the dashboard process) and mount a trusted API-format ComfyUI graph at `COMFYUI_WORKFLOW_PATH` in the dashboard container. The graph must contain the exact string `{{PROMPT}}` as an input value; `{{SEED}}` is optionally replaced by a random integer. Only configure a graph tested against the intended model.
+
+To enable reference image upload, also mount a separately tested image-to-image API graph and set `COMFYUI_IMG2IMG_WORKFLOW_PATH`. This graph must contain `{{IMAGE}}` at its LoadImage input as well as `{{PROMPT}}`. Input images are uploaded to ComfyUI and remain in its input directory; generated images remain in its output directory under ComfyUI's own retention policy. Keep ComfyUI private and limit access to trusted dashboard infrastructure. No model or workflow is supplied by this integration.

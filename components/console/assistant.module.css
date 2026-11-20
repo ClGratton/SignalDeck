@@ -2064,3 +2064,19 @@
 .stopBtn:hover {
   background: var(--down-ink);
 }
+
+.assistantIndex button[data-surface='image'] { background: color-mix(in oklch, var(--primary) 18%, var(--surface)); }
+.imageHeader { display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.imageHeader button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+.imageContent { overflow: auto; padding: 1.25rem; }
+.imageForm { display: grid; gap: 0.6rem; max-width: 45rem; }
+.imageForm label { font-weight: 700; }
+.imageForm textarea { resize: vertical; min-height: 6rem; padding: 0.7rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink); font: inherit; }
+.imageForm button { justify-self: start; padding: 0.55rem 1rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink); cursor: pointer; }
+.imageForm button:disabled { opacity: .5; cursor: default; }
+.imageUpload { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.imageResults { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; }
+.imageResults figure { margin: 0; max-width: min(100%, 48rem); }
+.imageResults img { display: block; max-width: 100%; height: auto; border-radius: var(--radius-sm); }
+.imageResults a { display: inline-block; margin-top: .5rem; color: var(--ink); }
+@media (max-width: 1100px) { .imagePane { z-index: calc(var(--z-header) + 4); } }
