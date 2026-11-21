@@ -9,6 +9,11 @@ const workflowPath = () => process.env.COMFYUI_WORKFLOW_PATH;
 const imageWorkflowPath = () => process.env.COMFYUI_IMG2IMG_WORKFLOW_PATH;
 const imageEnabled = () => !!imageWorkflowPath();
 const json = (error: string, status: number) => NextResponse.json({ error }, { status });
+function providerError(status: number) {
+  if (status === 409 || status === 429) return json('The image service is busy. Please try again shortly.', status);
+  if (status >= 500) return json('The image service is temporarily unavailable.', 503);
+  return json('The image service could not process the request.', 502);
+}
 
 async function comfy(path: string, init?: RequestInit) {
   const url = base();
@@ -104,7 +109,7 @@ export async function POST(req: NextRequest) {
       const upload = new FormData();
       upload.set('image', file, `reference-${crypto.randomUUID()}.${file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg'}`);
       const result = await comfy('/upload/image', { method: 'POST', body: upload });
-      if (!result.ok) throw new Error('upload failed');
+      if (!result.ok) return providerError(result.status);
       const uploaded = await result.json();
       if (typeof uploaded.name !== 'string') throw new Error('bad upload response');
       image = uploaded.subfolder ? `${uploaded.subfolder}/${uploaded.name}` : uploaded.name;
@@ -113,9 +118,9 @@ export async function POST(req: NextRequest) {
     if (!raw.includes('"{{PROMPT}}"') || (image && !raw.includes('"{{IMAGE}}"'))) throw new Error('invalid workflow');
     const workflow = replaceTokens(JSON.parse(raw), prompt.trim(), image, Math.floor(Math.random() * 2 ** 32));
     const result = await comfy('/prompt', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: workflow }) });
-    if (!result.ok) return json('The image workflow was rejected by the server.', 502);
+    if (!result.ok) return providerError(result.status);
     const payload = await result.json();
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.prompt_id ?? '')) throw new Error('invalid response');
     return NextResponse.json({ id: payload.prompt_id });
-  } catch { return json('Unable to start image generation. Check the image service configuration.', 502); }
+  } catch { return json('The image service is temporarily unavailable.', 503); }
 }
