@@ -1,0 +1,17 @@
+[Unit]
+Description=Grtlabs LAP public search LAN relay
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/grtlabs-lap-search/relay.env
+ExecStart=/usr/bin/python3 /opt/grtlabs-lap-search/relay.py
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
