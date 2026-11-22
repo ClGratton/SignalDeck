@@ -36,7 +36,7 @@ function providerError(status: number) {
   return json('The image service could not process the request.', 502);
 }
 
-async function comfy(path: string, init?: RequestInit) {
+async function comfy(path: string, init?: RequestInit, timeoutMs = 15000) {
   const url = base();
   if (!url) throw new Error('Image generation is not configured.');
   const headers = new Headers(init?.headers);
@@ -44,7 +44,7 @@ async function comfy(path: string, init?: RequestInit) {
   const token = tokenFile ? (await readFile(tokenFile, 'utf8')).trim() : process.env.COMFYUI_TOKEN;
   if (tokenFile && !token) throw new Error('Image service token file is empty.');
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  return fetch(`${url}${path}`, { ...init, headers, redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15000) });
+  return fetch(`${url}${path}`, { ...init, headers, redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
 }
 function replaceTokens(value: unknown, prompt: string, image: string | null, seed: number): unknown {
   if (value === '{{PROMPT}}') return prompt;
@@ -172,9 +172,16 @@ async function startInpaint(prompt: string, file: FormDataEntryValue | null, mas
   const upload = new FormData();
   upload.set('image', file, `inpaint-${crypto.randomUUID()}.${ext}`);
   upload.set('mask', mask, `mask-${crypto.randomUUID()}.png`);
-  const up = await comfy('/upload/inpaint', { method: 'POST', body: upload });
+  // Optional recolor pre-fill (plan.color): a THIRD part after image and mask; the relay shifts the masked pixels' colour first.
+  const recolor = String(form.get('recolor') ?? '').trim();
+  if (recolor) {
+    if (!/^[#\w .-]{1,40}$/.test(recolor)) return json('Unknown colour.', 400);
+    upload.set('recolor', recolor);
+  }
+  const up = await comfy('/upload/inpaint', { method: 'POST', body: upload }, 40000);
   if (up.status === 400) {
     const reason = (await up.text().catch(() => '')).replace(/^invalid image or mask:?\s*/, '').slice(0, 200).replace(/[^ -~]/g, '');
+    if (/colou?r/i.test(reason)) return json('That colour is not recognised. Try a common colour name or a hex value.', 400);
     return json(`The image or mask was rejected${reason ? `: ${reason}` : ''} (need 64-3072 px, at least one selected pixel, mask matching the image).`, 400);
   }
   if (!up.ok) return providerError(up.status);

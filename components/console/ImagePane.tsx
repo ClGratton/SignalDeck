@@ -3,14 +3,15 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowLeft, Download, ImagePlus, Pencil, Plus, RotateCcw, Scaling, X } from 'lucide-react';
 import styles from './assistant.module.css';
-import { InpaintEditor, type InpaintParams } from './InpaintEditor';
+import { InpaintEditor, type InpaintParams, type PlanSummary } from './InpaintEditor';
 
 const JOB_KEY = 'grtlabs.imageJob';
 const JOB_MAX_MS = 30 * 60 * 1000;
 const API = '/api/assistant/images';
 type Kind = 'create' | 'edit';
 type Phase = 'queued' | 'running' | 'loading' | 'finishing' | 'revealing' | 'done' | 'error';
-interface Saved { id: string; ts: number; prompt: string; kind: Kind; thumb: string | null; ar: number }
+interface Saved { id: string; ts: number; prompt: string; kind: Kind; thumb: string | null; ar: number; plan?: PlanSummary | null }
+const planLine = (pl: PlanSummary | null | undefined) => pl ? [pl.op[0].toUpperCase() + pl.op.slice(1), pl.target, pl.color].filter(Boolean).join(' \u00b7 ') : '';
 
 const fmt = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -45,6 +46,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
   const [phase, setPhase] = useState<Phase>('queued');
   const [kind, setKind] = useState<Kind>('create');
   const [stagePrompt, setStagePrompt] = useState('');
+  const [stagePlan, setStagePlan] = useState<PlanSummary | null>(null);
   const [thumb, setThumb] = useState<string | null>(null);
   const [ar, setAr] = useState(1);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
@@ -54,7 +56,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
   const [elapsed, setElapsed] = useState(0);
   const [count, setCount] = useState(0);
   const startedRef = useRef(0);
-  const lastForm = useRef<{ form: FormData; kind: Kind; thumb: string | null; ar: number } | null>(null);
+  const lastForm = useRef<{ form: FormData; kind: Kind; thumb: string | null; ar: number; plan: PlanSummary | null } | null>(null);
   const urlRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
@@ -78,7 +80,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
       const saved = JSON.parse(localStorage.getItem(JOB_KEY) || 'null') as Saved | null;
       if (saved?.id && Date.now() - saved.ts < JOB_MAX_MS) {
         startedRef.current = saved.ts; setJob(saved.id); setKind(saved.kind ?? 'create'); setStagePrompt(saved.prompt ?? ''); setPrompt(saved.prompt ?? '');
-        setThumb(saved.thumb ?? null); setAr(saved.ar || 1); setPhase('queued'); setStage(true);
+        setThumb(saved.thumb ?? null); setAr(saved.ar || 1); setStagePlan(saved.plan ?? null); setPhase('queued'); setStage(true);
       } else localStorage.removeItem(JOB_KEY);
     } catch { /* storage unavailable */ }
   }, []);
@@ -133,8 +135,9 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
     return () => { active = false; window.clearInterval(timer); };
   }, [stage, job, polling, reveal]);
 
-  async function startJob(form: FormData, k: Kind, th: string | null, ratio: number) {
-    lastForm.current = { form, kind: k, thumb: th, ar: ratio };
+  async function startJob(form: FormData, k: Kind, th: string | null, ratio: number, plan: PlanSummary | null = null) {
+    lastForm.current = { form, kind: k, thumb: th, ar: ratio, plan };
+    setStagePlan(plan);
     const p = String(form.get('prompt') ?? '');
     setErr(''); setCount(0); setJob(null); setResultUrl(null); setRevealed(false); setCompare(false);
     setKind(k); setThumb(th); setAr(ratio); setStagePrompt(p); setElapsed(0); setPhase('queued'); setStage(true); setEditSource(null);
@@ -144,7 +147,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Could not start generation.');
       startedRef.current = Date.now();
-      const saved: Saved = { id: data.id, ts: startedRef.current, prompt: p, kind: k, thumb: th, ar: ratio };
+      const saved: Saved = { id: data.id, ts: startedRef.current, prompt: p, kind: k, thumb: th, ar: ratio, plan };
       try { localStorage.setItem(JOB_KEY, JSON.stringify(saved)); }
       catch { try { localStorage.setItem(JOB_KEY, JSON.stringify({ ...saved, thumb: null })); } catch { /* ignore */ } }
       setJob(data.id);
@@ -159,10 +162,11 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
   async function submitInpaint(image: Blob, mask: Blob, p: InpaintParams) {
     const form = new FormData();
     form.set('prompt', p.prompt); form.set('mode', p.mode);
-    form.set('strength', String(p.strength)); form.set('grow', String(p.grow)); form.set('blend', String(p.blend));
+    form.set('strength', String(p.strength)); form.set('grow', String(p.grow)); form.set('blend', String(p.blend)); form.set('context', String(p.context));
+    if (p.recolor) form.set('recolor', p.recolor);
     form.set('image', image, image.type === 'image/png' ? 'source.png' : 'source.jpg'); form.set('mask', mask, 'mask.png');
     const t = await makeThumb(image); // the clean photo: never the red mask overlay
-    void startJob(form, 'edit', t?.url ?? null, t?.ar ?? 1);
+    void startJob(form, 'edit', t?.url ?? null, t?.ar ?? 1, p.plan);
   }
   async function editResult() {
     try {
@@ -179,7 +183,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
   }
   function retry() {
     const l = lastForm.current;
-    if (l) void startJob(l.form, l.kind, l.thumb, l.ar); else leave(false);
+    if (l) void startJob(l.form, l.kind, l.thumb, l.ar, l.plan); else leave(false);
   }
 
   const showBlur = phase !== 'done' && !(phase === 'revealing' && revealed);
@@ -206,6 +210,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
           {resultUrl && <img className={styles.rsResult} data-on={(revealed && !compare) || undefined} src={resultUrl} alt={stagePrompt ? `Generated image: ${stagePrompt}` : 'Generated image'} />}
           {phase === 'error' && <div className={styles.rsFail} role="alert"><p>{err}</p></div>}
         </div>
+        {stagePlan && <p className={styles.rsPlan}><span className={styles.rsPlanChip}>{planLine(stagePlan)}</span>{stagePlan.source === 'fallback' && <span className={styles.rsPlanNote}>basic plan</span>}</p>}
         {stagePrompt && <p className={styles.rsPrompt} title={stagePrompt}>{stagePrompt}</p>}
         <div className={styles.rsActions}>
           {phase === 'error' && <><button type="button" className={styles.rsPrimary} onClick={retry}><RotateCcw size={16} aria-hidden /> Retry</button><button type="button" className={styles.rsGhost} onClick={() => leave(false)}><ArrowLeft size={16} aria-hidden /> Back to create</button></>}
