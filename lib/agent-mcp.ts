@@ -27,6 +27,7 @@ import {
   type GuestPowerAction,
   type LabService,
 } from '@/lib/console';
+import { relayFetch } from '@/lib/image-relay';
 import { LAB_METHODS, type LabMethod } from '@/lib/homelab';
 import { getTrafficSeries } from '@/lib/cloudflare';
 import { sshConfigured, sshRun } from '@/lib/ssh';
@@ -53,7 +54,7 @@ export interface McpTool {
 }
 
 export interface McpToolResult {
-  content: { type: 'text'; text: string }[];
+  content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[];
   isError?: boolean;
 }
 
@@ -183,6 +184,25 @@ export const MCP_TOOLS: McpTool[] = [
     annotations: READ,
   },
   {
+    name: 'view_image',
+    title: 'View an image',
+    description:
+      'LOOK at an image from the image relay (read-only; returns a JPEG you can see). source "output" = a generated file in ComfyUI/output, "upload" = an uploaded file, both by bare file name; "job" + job_id (full uuid or unique hex prefix) = the source | mask overlay (red) | output. Optional crop [x0,y0,x1,y1] (pixels, or 0-1 fractions) to zoom, max_px (default 1024, max 2048), side_by_side for jobs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', enum: ['output', 'upload', 'job'] },
+        name: { type: 'string', description: 'Bare file name (no path) for output/upload.' },
+        job_id: { type: 'string', description: 'Job uuid or unique hex prefix (e.g. fa1e28db).' },
+        max_px: { type: 'integer', minimum: 64, maximum: 2048 },
+        crop: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4 },
+        side_by_side: { type: 'boolean' },
+      },
+      required: ['source'],
+    },
+    annotations: READ,
+  },
+  {
     name: 'read_reference',
     title: 'Lab API reference',
     description:
@@ -239,7 +259,7 @@ const INSTRUCTIONS_BUDGET = 2000;
 const INSTRUCTIONS_BASE =
   'Direct access to this homelab (Proxmox, TrueNAS, Home Assistant, Jellyfin, Cloudflare, Coolify, Nginx Proxy Manager, SSH) through the Grtlabs dashboard, which holds the credentials. ' +
   'Calls execute immediately — there is no confirmation on the server; your own permission mode is the approval. ' +
-  'Read with lab_get, act with lab_request / run_shell / guest_power / ha_service; read_reference("apis"|"ssh"|"memory") before an unfamiliar backend. ' +
+  'Read with lab_get (view_image to SEE generated images), act with lab_request / run_shell / guest_power / ha_service; read_reference("apis"|"ssh"|"memory") before an unfamiliar backend. ' +
   'The lab memory below is shared with the dashboard assistant: trust it until reality contradicts it, then fix it (update_memory / forget_memory); save durable lab facts only (save_memory).';
 
 export function mcpInstructions(): string {
@@ -340,6 +360,30 @@ export async function callMcpTool(name: string, args: Record<string, unknown>): 
     case 'get_traffic': {
       const series = await getTrafficSeries();
       return text(series ? JSON.stringify(series) : 'Traffic integration is off (no Cloudflare credentials).');
+    }
+
+    case 'view_image': {
+      const q = new URLSearchParams();
+      const source = str(args.source);
+      if (!['output', 'upload', 'job'].includes(source)) return text('source must be output, upload or job.', true);
+      q.set('source', source);
+      if (str(args.name)) q.set('name', str(args.name));
+      if (str(args.job_id)) q.set('job_id', str(args.job_id));
+      if (typeof args.max_px === 'number') q.set('max_px', String(Math.round(args.max_px)));
+      if (Array.isArray(args.crop)) {
+        if (args.crop.length !== 4 || !args.crop.every((n) => typeof n === 'number' && Number.isFinite(n))) return text('crop must be 4 numbers.', true);
+        q.set('crop', args.crop.join(','));
+      }
+      if (args.side_by_side === true) q.set('side_by_side', '1');
+      const res = await relayFetch(`/inspect?${q}`, {}, 40000);
+      if (!res.ok) return text(`view_image failed: ${res.status} ${(await res.text()).slice(0, 200)}`, true);
+      const buf = Buffer.from(await res.arrayBuffer());
+      return {
+        content: [
+          { type: 'image', data: buf.toString('base64'), mimeType: 'image/jpeg' },
+          { type: 'text', text: res.headers.get('x-inspect-info') ?? 'image' },
+        ],
+      };
     }
 
     case 'read_reference':
