@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { X } from 'lucide-react';
+import { LoaderCircle, X } from 'lucide-react';
 import styles from './assistant.module.css';
 
 const JOB_KEY = 'grtlabs.imageJob';
@@ -76,17 +76,17 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not start generation.'); setBusy(false); }
   }
   return <section className={`${styles.browserPane} ${styles.imagePane}`} style={{ display: visible ? undefined : 'none' }} aria-label="Image generation">
-    <header className={styles.imageHeader}><strong>Image generation</strong><button type="button" onClick={onClose} aria-label="Close image generation"><X size={18}/></button></header>
+    <header className={styles.imageHeader}><span className={styles.imageTitle}>Image generation</span><button type="button" className={styles.browserPaneClose} onClick={onClose} aria-label="Close image generation"><X size={16}/></button></header>
     <div className={styles.imageContent}>
       <form onSubmit={generate} className={styles.imageForm}>
         <label htmlFor="image-prompt">Prompt</label>
         <textarea id="image-prompt" value={prompt} onChange={e => setPrompt(e.target.value)} maxLength={4000} placeholder="Describe the image you want to create" rows={4} />
         {img2img && <label className={styles.imageUpload}>Base image <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => setFile(e.target.files?.[0] ?? null)} />{file && <button type="button" onClick={() => { setFile(null); if (inputRef.current) inputRef.current.value = ''; }}>Remove</button>}</label>}
-        <button type="submit" disabled={!configured || busy || !prompt.trim()}>{busy ? 'Generating…' : 'Generate'}</button>
-        {configured === false && <p role="status">{unavailable}</p>}
-        {error && <p role="alert">{error}</p>}
+        <button type="submit" disabled={!configured || busy || !prompt.trim()}>{busy ? 'Generating' : 'Generate'}</button>
+        {configured === false && <p role="status" className={styles.imageNote}>{unavailable}</p>}
+        {error && <p role="alert" className={styles.imageError}>{error}</p>}
       </form>
-      {busy && <p role="status">Generating your image. This may take a few minutes.</p>}
+      {busy && <p role="status" className={`${styles.browserLoading} ${styles.imageBusy}`}><LoaderCircle size={15} aria-hidden /> Generating your image. This may take a few minutes.</p>}
       {job && count > 0 && <div className={styles.imageResults}>{Array.from({ length: count }, (_, i) => <figure key={i}><img src={`/api/assistant/images?id=${encodeURIComponent(job)}&image=${i}`} alt={`Generated image ${i + 1}`} /><a href={`/api/assistant/images?id=${encodeURIComponent(job)}&image=${i}`} download={`generated-${i + 1}.png`}>Download</a></figure>)}</div>}
     </div>
   </section>;
