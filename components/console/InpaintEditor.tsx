@@ -1,13 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Brush, CircleMinus, Eraser, FlipHorizontal2, LoaderCircle, Sparkles, Trash2, Undo2, Wand2, X } from 'lucide-react';
 import styles from './assistant.module.css';
 import { embedImage, predictMask, type Box, type Embedding } from '@/lib/segment-client';
 import { IDENTITY, clampView, gestureView, screenToImage, zoomAt, type View } from '@/lib/view-transform';
 import { encodeMaskPng } from '@/lib/png-mask';
-import { requestPlan, type Plan } from '@/lib/plan-client';
-import { Button, Chip, Field } from '@/components/ui';
+import { Button, Field } from '@/components/ui';
+import type { EditOverrides } from '@/lib/edit-client';
 
 // Mirrors the relay's rules (relay.py _inpaint_prepare): 64..3072 px per side, <= 9.5 MP, mask == image size, binary mask.
 const MAX_SIDE = 2048;
@@ -15,22 +15,17 @@ const MAX_MPX = 9_000_000;
 const MIN_SIDE = 64;
 const UNDO_LIMIT = 12;
 const MASK_RGB = [255, 64, 96];
-export type InpaintMode = 'recolor' | 'replace' | 'remove';
 export interface PlanSummary { op: string; target: string; color: string | null; prompt: string; source: 'llm' | 'fallback' }
-export interface InpaintParams {
-  mode: InpaintMode; prompt: string; strength: number; grow: number; blend: number;
-  context: number; recolor: string | null; negative: string; plan: PlanSummary | null;
+/** What Generate sends: the words, plus optional overrides when re-running a changed plan. The server does everything else. */
+export interface InpaintParams { instruction: string; overrides?: EditOverrides }
+/** The one continuous stage: the editor stays mounted from Generate to the reveal and renders this in place. */
+export interface RunView {
+  stage: string; line: string; time: string; hint: string; plan: PlanSummary | null; maskPreview: string | null;
+  resultUrl: string | null; resultOn: boolean; blur: boolean; error: string; live: boolean; final: boolean; failed: boolean; actions: ReactNode;
 }
-type Flow = 'idle' | 'planning' | 'selecting' | 'review';
-const COUNTDOWN = 5;
-const fmtS = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
-const modeOf = (op: string): InpaintMode => (op === 'recolor' ? 'recolor' : op === 'remove' ? 'remove' : 'replace');
-const cssColor = (c: string | null) => (c && typeof CSS !== 'undefined' && CSS.supports('color', c.replace(/\s+/g, '')) ? c.replace(/\s+/g, '') : null);
-const DEFAULTS: Record<InpaintMode, { strength: number; grow: number; blend: number; prompt: string; ph: string }> = {
-  recolor: { strength: 0.55, grow: 8, blend: 28, prompt: '', ph: 'New colour or material, e.g. red leather' },
-  replace: { strength: 0.85, grow: 8, blend: 28, prompt: '', ph: 'What should appear instead' },
-  remove: { strength: 1, grow: 10, blend: 28, prompt: 'empty plain background, natural texture continuing the surroundings', ph: 'What should fill the gap' },
-};
+type Op3 = 'recolor' | 'replace' | 'remove';
+const op3 = (op: string): Op3 => (op === 'recolor' ? 'recolor' : op === 'remove' ? 'remove' : 'replace');
+const planLine = (pl: PlanSummary) => [pl.op[0].toUpperCase() + pl.op.slice(1), pl.target, pl.color].filter(Boolean).join(' \u00b7 ');
 type Tool = 'select' | 'subtract' | 'brush' | 'erase';
 type Prep = 'preparing' | 'ready' | 'error';
 const TOOLS: Array<{ id: Tool; label: string; Icon: typeof Brush }> = [
@@ -40,10 +35,12 @@ const TOOLS: Array<{ id: Tool; label: string; Icon: typeof Brush }> = [
   { id: 'erase', label: 'Erase', Icon: Eraser },
 ];
 
-export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
-  source: Blob; busy: boolean; onCancel: () => void;
-  onSubmit: (image: Blob, mask: Blob, params: InpaintParams) => void;
+export function InpaintEditor({ source, busy, run, onSubmit, onCancel, onRerun }: {
+  source: Blob; busy: boolean; run: RunView | null; onCancel: () => void;
+  onSubmit: (image: Blob, mask: Blob | null, params: InpaintParams) => void;
+  onRerun?: (overrides: EditOverrides) => void;
 }) {
+
   const imgRef = useRef<HTMLCanvasElement>(null);   // photo at working resolution
   const maskRef = useRef<HTMLCanvasElement>(null);  // display of the mask (the array below is the truth)
   const prevRef = useRef<HTMLCanvasElement>(null);  // box preview + pointer surface
@@ -71,28 +68,15 @@ export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
   const [note, setNote] = useState('');
   const [tool, setTool] = useState<Tool>('select');
   const [size, setSize] = useState(40);
-  const [mode, setMode] = useState<InpaintMode>('recolor');
-  const [prompt, setPrompt] = useState('');
-  const [strength, setStrength] = useState(DEFAULTS.recolor.strength);
-  const [grow, setGrow] = useState(DEFAULTS.recolor.grow);
-  const [blend, setBlend] = useState(DEFAULTS.recolor.blend);
   const [undoCount, setUndoCount] = useState(0);
   const [prep, setPrep] = useState<Prep>('preparing');
   const [segBusy, setSegBusy] = useState(false);
   const [instruction, setInstruction] = useState('');
-  const [flow, setFlow] = useState<Flow>('idle');
-  const [plan, setPlan] = useState<Plan | null>(null);
-  const [color, setColor] = useState('');
-  const [context, setContext] = useState(1.5);
-  const [negative, setNegative] = useState('');
-  const [planOpen, setPlanOpen] = useState(false);
-  const [count, setCount] = useState<number | null>(null);
-  const [flowMs, setFlowMs] = useState(0);
-  const abortRef = useRef<AbortController | null>(null);
-  const flowStart = useRef(0);
+  const [changeOpen, setChangeOpen] = useState(false);
+  const [chOp, setChOp] = useState<Op3>('recolor');
+  const [chPrompt, setChPrompt] = useState('');
+  const [chColor, setChColor] = useState('');
   const prepP = useRef<Promise<void> | null>(null);
-  const plannedFor = useRef('');
-  const working = flow === 'planning' || flow === 'selecting';
 
   const prepare = useCallback((): Promise<void> => {
     const p = (async () => {
@@ -124,20 +108,6 @@ export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
     })();
     return () => { alive = false; };
   }, [source, prepare]);
-
-  useEffect(() => {
-    if (!working) return;
-    const t = window.setInterval(() => setFlowMs(Date.now() - flowStart.current), 1000);
-    setFlowMs(Date.now() - flowStart.current);
-    return () => window.clearInterval(t);
-  }, [working]);
-  useEffect(() => () => abortRef.current?.abort(), []);
-  useEffect(() => {
-    if (count === null) return;
-    if (count <= 0) { setCount(null); void submit(); return; }
-    const t = window.setTimeout(() => setCount(c => (c === null ? null : c - 1)), 1000);
-    return () => window.clearTimeout(t);
-  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   const paintRect = (x0: number, y0: number, x1: number, y1: number) => {
     const { w, h } = dims.current;
@@ -222,8 +192,7 @@ export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
       e.preventDefault(); panning.current = { x: e.clientX, y: e.clientY };
       try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* */ } return;
     }
-    if (!ready || busy || working) return;
-    setCount(null);
+    if (!ready || busy || run) return;
     if (e.pointerType !== 'touch') { try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* */ } }
     const p = toImage(e.clientX, e.clientY);
     if (e.pointerType === 'touch' && !paintTool) { tap.current = { x: p.x, y: p.y, cx: e.clientX, cy: e.clientY }; return; } // touch: tap only, no box
@@ -307,142 +276,99 @@ export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
     finally { setSegBusy(false); }
   }
 
-  function pickMode(m: InpaintMode) {
-    setCount(null); setMode(m); const d = DEFAULTS[m]; setStrength(d.strength); setGrow(d.grow); setBlend(d.blend);
-    setPrompt(p => (!p || Object.values(DEFAULTS).some(x => x.prompt && x.prompt === p)) ? d.prompt : p);
-  }
+  // A run starts: the picture returns to the fitted view and the stage takes over in place (same element tree, no remount).
+  const running = !!run;
+  useEffect(() => { if (running) { resetView(); setErr(''); setNote(''); } else setChangeOpen(false); }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const anyMask = () => { const m = mask.current; for (let i = 0; i < m.length; i++) if (m[i]) return true; return false; };
-  function applyPlan(pl: Plan) {
-    const m = modeOf(pl.op);
-    setPlan(pl); setMode(m); setPrompt(pl.image_prompt.trim() || DEFAULTS[m].prompt || instruction.trim());
-    setStrength(pl.strength); setGrow(pl.grow); setBlend(28); setContext(pl.context);
-    setColor(m === 'recolor' ? (pl.color ?? '') : ''); setNegative(pl.negative_prompt); setPlanOpen(false);
-  }
-  function cancelFlow() { abortRef.current?.abort(); setFlow('idle'); setNote(''); }
-  /** Understand the instruction (local LLM), find the object when nothing is selected, then show the plan with a short auto-continue. */
-  async function runInstruction() {
-    const text = instruction.trim(); if (!text || working) return;
-    setErr(''); setNote(''); setCount(null);
-    const ac = new AbortController(); abortRef.current = ac; flowStart.current = Date.now(); setFlowMs(0); setFlow('planning');
-    let pl: Plan;
-    try { pl = await requestPlan(imgRef.current!, mask.current, text, ac.signal); }
-    catch (e) {
-      if (ac.signal.aborted) return;
-      const m = mode;
-      pl = { op: m, target: '', color: null, image_prompt: text, negative_prompt: '', strength: DEFAULTS[m].strength, grow: DEFAULTS[m].grow, context: 1.5, box: null, confidence: null, source: 'fallback', prefill: false,
-        reason: (e instanceof Error ? e.message : 'The planner is unavailable.') + ' Your text is used as the prompt.' };
-    }
-    if (ac.signal.aborted) return;
-    plannedFor.current = text; applyPlan(pl);
-    if (!anyMask()) {
-      if (!pl.box) { setFlow('idle'); setNote('Could not tell where that is. Tap the object or drag a box around it, then press Generate.'); return; }
-      setFlow('selecting');
-      try {
-        if (!emb.current) await (prepP.current ?? prepare());
-        if (!emb.current) throw new Error('Auto-select is unavailable. Paint the area with the brush, then press Generate.');
-        const { w, h } = dims.current;
-        const r = await predictMask(emb.current, [], pl.box, w, h, async () => { const e = await embedImage(imgRef.current!); emb.current = e; return e; });
-        if (ac.signal.aborted) return;
-        emb.current = r.emb; snapshot(); mask.current = r.mask.slice(); repaintAll();
-        if (!anyMask()) throw new Error('Nothing was selected. Tap the object or drag a box around it, then press Generate.');
-      } catch (e) { if (ac.signal.aborted) return; setFlow('idle'); setNote(e instanceof Error ? e.message : 'Selection failed.'); return; }
-    }
-    setFlow('review'); setCount(COUNTDOWN);
-  }
-  /** The one primary action: plan first when the text is new, otherwise send. */
-  function go() {
-    if (working) return;
-    if (instruction.trim() && (flow !== 'review' || instruction.trim() !== plannedFor.current)) { void runInstruction(); return; }
-    void submit();
-  }
-
   async function submit() {
-    setCount(null);
     const { w, h } = dims.current; setErr('');
+    const text = instruction.trim();
     if (Math.min(w, h) < MIN_SIDE || Math.max(w, h) > 3072 || w * h > 9_500_000) { setErr(`Image size ${w} x ${h} px is outside the allowed range (64 to 3072 px per side, 9.5 MP).`); return; }
     if (mask.current.length !== w * h) { setErr('The selection does not match the image size. Reopen the editor.'); return; }
-    let any = false; for (let i = 0; i < mask.current.length; i++) if (mask.current[i]) { any = true; break; }
-    if (!any) { setErr('Select something first: tap an object or paint with the brush.'); return; }
-    if (!prompt.trim()) { setErr('Type what you want to change first, for example "make the car white".'); return; }
-    // The mask is encoded straight from the array (binary, opaque, exactly image-sized), never via canvas readback.
-    const maskBlob = encodeMaskPng(mask.current, w, h);
+    if (text.length < 2) { setErr('Type what you want to change first, for example "make the car white".'); return; }
+    // With a selection it is sent as is; without one the server finds the object itself (plan box -> segmentation).
+    const maskBlob = anyMask() ? encodeMaskPng(mask.current, w, h) : null; // encoded straight from the array, never via canvas readback
     let imgBlob = await new Promise<Blob | null>(r => imgRef.current!.toBlob(r, 'image/png'));
     if (imgBlob && imgBlob.size > 10 * 1024 * 1024) imgBlob = await new Promise<Blob | null>(r => imgRef.current!.toBlob(r, 'image/jpeg', 0.95));
     if (!imgBlob || imgBlob.size > 12 * 1024 * 1024) { setErr('The photo is too large to send even after resizing. Try a smaller one.'); return; }
-    if (maskBlob.size > 4 * 1024 * 1024) { setErr('The selection is too large to send.'); return; }
-    const rc = mode === 'recolor' && color.trim() ? color.trim() : null;
-    onSubmit(imgBlob, maskBlob, { mode, prompt: prompt.trim(), strength, grow, blend, context, recolor: rc, negative,
-      plan: plan ? { op: mode === modeOf(plan.op) ? plan.op : mode, target: plan.target, color: rc, prompt: prompt.trim(), source: plan.source } : null });
+    if (maskBlob && maskBlob.size > 4 * 1024 * 1024) { setErr('The selection is too large to send.'); return; }
+    onSubmit(imgBlob, maskBlob, { instruction: text });
+  }
+  function openChange() {
+    if (run?.plan) { setChOp(op3(run.plan.op)); setChPrompt(run.plan.prompt); setChColor(run.plan.color ?? ''); }
+    setChangeOpen(o => !o);
+  }
+  function rerun() {
+    const color = chOp === 'recolor' && chColor.trim() ? chColor.trim() : undefined;
+    setChangeOpen(false);
+    onRerun?.({ op: chOp, image_prompt: chPrompt.trim() || undefined, color });
   }
 
   const status = prep === 'preparing' ? 'Preparing selection…' : segBusy ? 'Selecting…' : '';
-  return <div className={styles.ed}>
-    <div className={styles.edBar}>
-      <div className={styles.edSeg} role="toolbar" aria-label="Selection tools">
-        {TOOLS.map(({ id, label, Icon }) => <button key={id} type="button" aria-pressed={tool === id} disabled={prep === 'error' && (id === 'select' || id === 'subtract')} onClick={() => setTool(id)}><Icon size={16} aria-hidden /><span>{label}</span></button>)}
+  return <div className={styles.ed} data-run={run ? run.stage : undefined} data-testid="inpaint-editor">
+    <div className={styles.edCtl} data-hide={run ? true : undefined} inert={run ? true : undefined}><div>
+      <div className={styles.edBar}>
+        <div className={styles.edSeg} role="toolbar" aria-label="Selection tools">
+          {TOOLS.map(({ id, label, Icon }) => <button key={id} type="button" aria-pressed={tool === id} disabled={prep === 'error' && (id === 'select' || id === 'subtract')} onClick={() => setTool(id)}><Icon size={16} aria-hidden /><span>{label}</span></button>)}
+        </div>
+        <div className={styles.edIcons}>
+          <button type="button" onClick={doUndo} disabled={!undoCount} aria-label="Undo" title="Undo"><Undo2 size={16} aria-hidden /></button>
+          <button type="button" onClick={invertMask} aria-label="Invert selection" title="Invert selection"><FlipHorizontal2 size={16} aria-hidden /></button>
+          <button type="button" onClick={clearMask} aria-label="Clear selection" title="Clear selection"><Trash2 size={16} aria-hidden /></button>
+        </div>
       </div>
-      <div className={styles.edIcons}>
-        <button type="button" onClick={doUndo} disabled={!undoCount} aria-label="Undo" title="Undo"><Undo2 size={16} aria-hidden /></button>
-        <button type="button" onClick={invertMask} aria-label="Invert selection" title="Invert selection"><FlipHorizontal2 size={16} aria-hidden /></button>
-        <button type="button" onClick={clearMask} aria-label="Clear selection" title="Clear selection"><Trash2 size={16} aria-hidden /></button>
-      </div>
-    </div>
-    {paintTool && <label className={styles.edSize}><span>Size</span><input type="range" min={4} max={200} value={size} onChange={e => setSize(Number(e.target.value))} aria-label="Brush size" /><output>{size}</output></label>}
+      {paintTool && <label className={styles.edSize}><span>Size</span><input type="range" min={4} max={200} value={size} onChange={e => setSize(Number(e.target.value))} aria-label="Brush size" /><output>{size}</output></label>}
+    </div></div>
     <div className={styles.edStage}>
-      <div ref={viewportRef} className={styles.edCanvas} data-testid="inpaint-viewport" data-working={working || undefined} style={{ aspectRatio: aspect || undefined, width: dims.current.w ? `min(100%, calc(62dvh * ${dims.current.w / dims.current.h}))` : undefined, cursor: paintTool ? 'cell' : 'crosshair' }}>
+      <div ref={viewportRef} className={styles.edCanvas} data-testid="inpaint-viewport" data-blur={run?.blur || undefined} style={{ aspectRatio: aspect || undefined, width: dims.current.w ? `min(100%, calc(62dvh * ${dims.current.w / dims.current.h}))` : undefined, cursor: run ? 'default' : paintTool ? 'cell' : 'crosshair' }}>
         <div ref={zoomRef} className={styles.edZoom} data-testid="inpaint-zoom">
-          <canvas ref={imgRef} className={styles.edLayer} />
-          <canvas ref={maskRef} className={`${styles.edLayer} ${styles.edMask}`} />
+          <canvas ref={imgRef} className={`${styles.edLayer} ${styles.edPhoto}`} data-testid="inpaint-photo" />
+          <canvas ref={maskRef} className={`${styles.edLayer} ${styles.edMask}`} data-testid="inpaint-mask" />
           <canvas ref={prevRef} className={styles.edLayer} data-testid="inpaint-surface" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={e => { if (e.pointerType !== 'touch' && !drawing.current) clearOverlay(); }} onContextMenu={e => e.preventDefault()} />
         </div>
-        {zoomK > 1 && <button type="button" className={styles.edFit} onClick={resetView} aria-label="Fit picture to view" title="Fit picture to view">Fit · {zoomK.toFixed(1)}×</button>}
+        {run?.maskPreview && <div className={styles.edOutline} data-testid="inpaint-outline" style={{ maskImage: `url(${run.maskPreview})`, WebkitMaskImage: `url(${run.maskPreview})` }} aria-hidden />}
+        {run?.live && <><div className={styles.rsGrain} aria-hidden /><div className={styles.rsShimmer} aria-hidden /></>}
+        {run?.resultUrl && <img className={styles.edResult} data-on={run.resultOn || undefined} src={run.resultUrl} alt="Edited image" data-testid="inpaint-result" />}
+        {run?.failed && <div className={styles.rsFail} role="alert"><p>{run.error}</p></div>}
+        {!run && zoomK > 1 && <button type="button" className={styles.edFit} onClick={resetView} aria-label="Fit picture to view" title="Fit picture to view">Fit · {zoomK.toFixed(1)}×</button>}
         {!ready && !err && <span className={styles.edLoading}><LoaderCircle size={16} aria-hidden /> Loading photo</span>}
-        {working && <div className={styles.edWork} role="status" aria-live="polite">
-          <p className={styles.edWorkLine}><LoaderCircle size={16} aria-hidden /> {flow === 'planning' ? 'Understanding your request…' : 'Selecting…'}<span className={styles.edPlanMeta}>{fmtS(flowMs)}</span></p>
-          {flow === 'planning' && <p className={styles.edPlanMeta}>{flowMs < 20000 ? 'Loading the local model. The first request takes about 80 seconds.' : 'Still working. The first request after idle is the slowest.'}</p>}
-          <Button variant="secondary" onClick={cancelFlow}>Cancel</Button>
-        </div>}
-        {status && !working && <span className={styles.edChip} role="status"><LoaderCircle size={12} aria-hidden /> {status}</span>}
+        {status && !run && <span className={styles.edChip} role="status"><LoaderCircle size={12} aria-hidden /> {status}</span>}
       </div>
     </div>
-    <Field as="textarea" label="What should change?" className={styles.edInstr} value={instruction} rows={2} maxLength={1000} disabled={working}
-      placeholder="e.g. make the car white" hint="Plain words are enough. A local AI works out the area and the settings."
-      onChange={e => { setInstruction(e.target.value); setCount(null); }}
-      onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); go(); } }} />
-    {plan && !working && <div className={styles.edPlan} data-review={flow === 'review' || undefined} role="group" aria-label="Edit plan">
-      <div className={styles.edPlanHead}>
-        <Chip tone="accent" mono>{plan.op}</Chip>
-        {plan.target && <span className={styles.edPlanTarget}>{plan.target}</span>}
-        {mode === 'recolor' && cssColor(color || null) && <span className={styles.edSwatch} style={{ background: cssColor(color || null)! }} title={color} aria-label={`Colour ${color}`} />}
-        {mode === 'recolor' && color && <span className={styles.edPlanMeta}>{color}</span>}
-        {plan.source === 'fallback' && <span className={styles.edPlanNote} title={plan.reason}>Basic plan</span>}
-      </div>
-      <div className={styles.edSeg3} role="group" aria-label="Edit type">
-        {(['recolor', 'replace', 'remove'] as const).map(m => <button key={m} type="button" aria-pressed={mode === m} onClick={() => pickMode(m)}>{m[0].toUpperCase() + m.slice(1)}</button>)}
-      </div>
-      {!planOpen && <p className={styles.edPlanPrompt}>{prompt}<span className={styles.edPlanMeta}> · strength {strength.toFixed(2)}</span></p>}
-      {planOpen && <div className={styles.edPlanEdit}>
-        <Field as="textarea" label="Image prompt" value={prompt} rows={3} maxLength={4000} onChange={e => { setPrompt(e.target.value); setCount(null); }} />
-        {mode === 'recolor' && <Field label="Colour" value={color} maxLength={40} hint="A colour name or a hex value such as #f4f4f2. Keeps the shading." onChange={e => { setColor(e.target.value); setCount(null); }} />}
+    {run && <div className={styles.edRun} data-testid="inpaint-run">
+      <p className={styles.rsLine} role="status" aria-live="polite" data-testid="inpaint-line">
+        <span className={styles.rsDot} data-error={run.failed || undefined} data-live={run.live || undefined} aria-hidden />
+        <span>{run.failed ? 'Generation failed' : run.line}</span>
+        {run.time && <span className={styles.rsTime}>{run.time}</span>}
+      </p>
+      {run.hint && <p className={styles.rsHint}>{run.hint}</p>}
+      {run.plan && <p className={`${styles.rsPlan} ${styles.edFade}`}><span className={styles.rsPlanChip}>{planLine(run.plan)}</span>{run.plan.source === 'fallback' && <span className={styles.rsPlanNote}>basic plan</span>}</p>}
+      {run.plan?.prompt && <p className={`${styles.rsPrompt} ${styles.edFade}`} title={run.plan.prompt}>{run.plan.prompt}</p>}
+      {changeOpen && !run.final && <div className={styles.edPlan} role="group" aria-label="Change the plan">
+        <div className={styles.edSeg3} role="group" aria-label="Edit type">
+          {(['recolor', 'replace', 'remove'] as const).map(m => <button key={m} type="button" aria-pressed={chOp === m} onClick={() => setChOp(m)}>{m[0].toUpperCase() + m.slice(1)}</button>)}
+        </div>
+        <Field as="textarea" label="Image prompt" value={chPrompt} rows={3} maxLength={4000} onChange={e => setChPrompt(e.target.value)} />
+        {chOp === 'recolor' && <Field label="Colour" value={chColor} maxLength={40} hint="A colour name or a hex value such as #f4f4f2." onChange={e => setChColor(e.target.value)} />}
+        <div className={styles.edPlanActions}><Button variant="ghost" onClick={() => setChangeOpen(false)}>Cancel</Button><Button variant="secondary" onClick={rerun}>Stop and re-run</Button></div>
       </div>}
-      {plan.source === 'fallback' && plan.reason && <p className={styles.edPlanNote}>{plan.reason}</p>}
-      <div className={styles.edPlanActions}>
-        {count !== null && <span className={styles.edCount} role="status">Starting in {count}s</span>}
-        {count !== null && <Button variant="ghost" onClick={() => setCount(null)}>Hold</Button>}
-        <Button variant="ghost" onClick={() => { setCount(null); setPlanOpen(o => !o); }} aria-expanded={planOpen}>{planOpen ? 'Done editing' : 'Edit plan'}</Button>
+      <div className={styles.rsActions}>
+        {run.actions}
+        {onRerun && !run.final && <button type="button" className={styles.rsGhost} aria-expanded={changeOpen} onClick={openChange}>Change</button>}
       </div>
     </div>}
-    <details className={styles.edAdv}><summary>Advanced</summary>
-      <label><span>Strength</span><input type="range" min={0.05} max={1} step={0.05} value={strength} onChange={e => { setCount(null); setStrength(Number(e.target.value)); }} /><output>{strength.toFixed(2)}</output></label>
-      <label><span>Grow</span><input type="range" min={0} max={64} value={grow} onChange={e => { setCount(null); setGrow(Number(e.target.value)); }} /><output>{grow}</output></label>
-      <label><span>Blend</span><input type="range" min={0} max={128} value={blend} onChange={e => { setCount(null); setBlend(Number(e.target.value)); }} /><output>{blend}</output></label>
-    </details>
-    {note && <p role="status" className={styles.imageNote}>{note}</p>}
-    {err && <p role="alert" className={styles.imageError}>{err}</p>}
-    <div className={styles.edActions}>
-      <button type="button" className={styles.edGo} onClick={go} disabled={!ready || busy || working}>{busy || working ? <LoaderCircle size={16} aria-hidden /> : <Sparkles size={16} aria-hidden />}{busy ? 'Generating' : working ? 'Working' : flow === 'review' && instruction.trim() === plannedFor.current ? 'Generate now' : 'Generate'}</button>
-      <button type="button" className={styles.edClose} onClick={onCancel} disabled={busy} aria-label="Close editor" title="Close editor"><X size={16} aria-hidden /></button>
-    </div>
+    <div className={styles.edCtl} data-hide={run ? true : undefined} inert={run ? true : undefined}><div>
+      <Field as="textarea" label="What should change?" className={styles.edInstr} value={instruction} rows={2} maxLength={1000} disabled={busy}
+        placeholder="e.g. make the car white" hint="Plain words are enough. Select an area first, or leave it and the server finds it for you."
+        onChange={e => setInstruction(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit(); } }} />
+      {note && <p role="status" className={styles.imageNote}>{note}</p>}
+      {err && <p role="alert" className={styles.imageError}>{err}</p>}
+      <div className={styles.edActions}>
+        <button type="button" className={styles.edGo} onClick={() => void submit()} disabled={!ready || busy}>{busy ? <LoaderCircle size={16} aria-hidden /> : <Sparkles size={16} aria-hidden />}{busy ? 'Starting' : 'Generate'}</button>
+        <button type="button" className={styles.edClose} onClick={onCancel} disabled={busy} aria-label="Close editor" title="Close editor"><X size={16} aria-hidden /></button>
+      </div>
+    </div></div>
   </div>;
 }

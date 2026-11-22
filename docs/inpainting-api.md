@@ -115,3 +115,23 @@ Implementation files on proxmox02 (`/mnt/truenas/data/grtlabs-ai/image/`): `plan
 - Verified: model download + sha256, unit load, `/plan` through `plan.py` (mask and no-mask, `source:"llm"`), LAB pre-fill on the car image (mean L*/a*/b* inside the 20.3% mask: original 45.0/7.1/8.6 -> white 79.2/0.6/2.0, red 44.8/52.9/40.9, black 8.8/1.0/1.2).
 - NOT yet verified: full jobs through the relay with measured dE in/outside the mask. The harness was started detached inside the app container (`node /tmp/t/run.mjs`, log `/tmp/t/log.txt`, outputs `/tmp/t/out/<id>.plan.json` and `<id>.result.png`, ids car, b, c, d; about 6 min each). Inputs and originals: `/var/tmp/et/in/` on proxmox02. To finish: copy `/tmp/t/out` back (`docker exec <app> tar c -C /tmp/t out | tar x -C /var/tmp/et`), then compute CIEDE2000/dE76 and mean LAB inside the mask before/after, and max abs diff outside mask grown by 8+28 px (expect 0), with `recolor.rgb2lab`. Acceptance for car: mean L* well above 45 and |a*|,|b*| small inside the mask.
 - `grtlabs-edit-planner` is stopped between plans; the relay was restarted with the new routes (backups `relay.py.bak-20261122-193220`).
+
+## 7. `POST /edit`: server-driven pipeline (2026-11-22) - the browser only displays state
+
+The relay runs the whole edit once it has the request. A phone that goes offline or asleep loses nothing: reconnect and `GET /edit/{id}`.
+The old calls (`/plan`, `/segment/*`, `/upload/inpaint`, `/prompt`) still work and are unchanged. The app no longer chains them from the client.
+
+- `POST /edit` (multipart, bearer, only from the app host). Fields: `image` (PNG/JPEG/WebP, <= 12 MB, 64-3072 px, <= 9.5 MP), `instruction` (2-1000 chars),
+  optional `mask` (PNG, same size, binary; if absent the server finds the object), optional `overrides` (JSON: `op` recolor|replace|remove|add|style, `color`, `image_prompt`, `strength`).
+  Returns `202 {"edit_id": "<32 hex>"}` at once. 400 on an invalid image/mask/field (reason in the body).
+- `GET /edit/{id}` -> `{stage, plan?, mask_preview?, job_id?, output?, error?, updated, times, width, height, instruction}`.
+  Stages: `planning` (local LLM planner, same lock and fallback as `/plan`; if the GPU is busy and there is no mask it waits and retries up to 10 min),
+  `selecting` (no mask: plan box -> SAM embed + predict), `preparing` (validates, recolor pre-fill, stages the upload; `mask_preview` = small RGBA outline PNG data URL),
+  `queued` (waits for the single image slot; retries on 409/503 up to 20 min), `generating` (job running), then `done` (`output: {job_id}`; fetch the image with the existing
+  `GET /history/{job_id}` + `/view`) or `error` (`error` = user-facing reason) or `cancelled`. `times` = unix seconds each stage began. `plan` = `{op,target,color,image_prompt,strength,source}`.
+- `POST /edit/{id}/cancel` -> stops planning/selecting/preparing/queued; an already running image job cannot be interrupted and is simply ignored.
+- Persistence: `/var/lib/grtlabs-image/edits/{id}.json` (+ `.img`, `.mask`), swept after 24 h. On relay start every non-final edit is resumed
+  (re-run from the stored inputs, or, once a job id exists, re-attached to that job; a dead job is reported as `error`). Same single-GPU rules as before.
+- App: `POST/GET/DELETE /api/assistant/images/edit` (session-gated, `hasValidSession()` first, token server-side). Client: `lib/edit-client.ts` (`watchEdit`: pauses with no
+  requests while `navigator.onLine` is false or the page is hidden, resumes on `online`/`visibilitychange`, exponential backoff 2 s -> 15 s on errors; id kept in localStorage `grtlabs.imageJob`).
+- Measured (real run through the app container, car photo 2016x1134, "make the car white", no client polling): planning 77 s (model load + LLM), selecting 4 s, preparing 2 s, queued 2 s, generating from t=85 s.

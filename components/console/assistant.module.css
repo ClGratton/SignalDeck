@@ -2214,3 +2214,27 @@
 .rsPlanChip { font-size: var(--text-xs); font-weight: 600; color: var(--ink); padding: 0.15rem 0.55rem; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-2); }
 .rsPlanNote { font-size: var(--text-xs); color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .edWorkLine svg { animation: none; } }
+
+/* One continuous stage: the editor stays mounted from Generate to the reveal. Controls collapse, the photo blurs in place,
+   the mask overlay never shows during a run, and the result crossfades over the same frame. */
+.edCtl { display: grid; grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows 500ms var(--ease-out-quint), opacity 300ms var(--ease-out-quint); }
+.edCtl > div { overflow: clip; min-height: 0; display: grid; gap: var(--space-xs); }
+.edCtl[data-hide] { grid-template-rows: 0fr; opacity: 0; pointer-events: none; }
+.edPhoto { transition: filter 700ms var(--ease-out-quint), transform 700ms var(--ease-out-quint); }
+.edCanvas[data-blur] .edPhoto { filter: blur(22px) saturate(0.9); transform: scale(1.12); }
+.ed[data-run] .edMask { opacity: 0; transition: none; } /* the red overlay never shows during a run */
+.ed[data-run] .edCanvas { pointer-events: none; }
+.edOutline { position: absolute; inset: 0; z-index: 2; pointer-events: none; mask-size: 100% 100%; -webkit-mask-size: 100% 100%; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat;
+  background: linear-gradient(110deg, rgb(255 255 255 / 0.55), var(--accent), rgb(255 255 255 / 0.55)); background-size: 220% 100%; animation: edSweep 2.6s linear infinite, edFadeIn 600ms var(--ease-out-quint) both; filter: drop-shadow(0 0 5px var(--accent)); }
+.edResult { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; filter: blur(20px); transform: scale(1.04); transition: opacity 800ms var(--ease-out-quint), filter 800ms var(--ease-out-quint), transform 800ms var(--ease-out-quint); z-index: 1; }
+.edResult[data-on] { opacity: 1; filter: blur(0); transform: none; }
+.edRun { display: grid; gap: var(--space-2xs); max-width: 40rem; animation: edFadeIn 500ms var(--ease-out-quint) both; }
+.edFade { animation: edFadeIn 600ms var(--ease-out-quint) both; }
+@keyframes edSweep { to { background-position: -220% 0; } }
+@keyframes edFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .edCtl, .edPhoto, .edResult { transition: opacity 200ms linear; }
+  .edCanvas[data-blur] .edPhoto, .edResult { transform: none; }
+  .edOutline { animation: edFadeIn 200ms linear both; }
+  .edRun, .edFade { animation: edFadeIn 200ms linear both; }
+}

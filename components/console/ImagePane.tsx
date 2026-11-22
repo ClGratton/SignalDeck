@@ -1,20 +1,23 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowLeft, Download, ImagePlus, Pencil, Plus, RotateCcw, Scaling, X } from 'lucide-react';
+import { ArrowLeft, Download, ImagePlus, Pencil, Plus, RotateCcw, Scaling, Square, X } from 'lucide-react';
 import styles from './assistant.module.css';
-import { InpaintEditor, type InpaintParams, type PlanSummary } from './InpaintEditor';
+import { InpaintEditor, type InpaintParams, type PlanSummary, type RunView } from './InpaintEditor';
+import { cancelEdit, startEditRequest, watchEdit, type EditPlan, type EditOverrides } from '@/lib/edit-client';
 
 const JOB_KEY = 'grtlabs.imageJob';
 const JOB_MAX_MS = 30 * 60 * 1000;
 const API = '/api/assistant/images';
 type Kind = 'create' | 'edit';
 type Phase = 'queued' | 'running' | 'loading' | 'finishing' | 'revealing' | 'done' | 'error';
-interface Saved { id: string; ts: number; prompt: string; kind: Kind; thumb: string | null; ar: number; plan?: PlanSummary | null }
-const planLine = (pl: PlanSummary | null | undefined) => pl ? [pl.op[0].toUpperCase() + pl.op.slice(1), pl.target, pl.color].filter(Boolean).join(' \u00b7 ') : '';
+// For an edit, `id` is the server's edit_id (the server drives the whole pipeline); for a plain generation it is the job id.
+interface Saved { id: string; ts: number; prompt: string; kind: Kind; thumb: string | null; ar: number; plan?: PlanSummary | null; edit?: boolean }
+const planLine = (pl: PlanSummary | null | undefined) => pl ? [pl.op[0].toUpperCase() + pl.op.slice(1), pl.target, pl.color].filter(Boolean).join(' · ') : '';
 
 const fmt = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const summary = (p: EditPlan | null): PlanSummary | null => p ? { op: p.op, target: p.target, color: p.color, prompt: p.image_prompt, source: p.source } : null;
 
 /** Small JPEG data URL of the clean source photo (no mask overlay), kept so a reload can show the blurred stage. */
 async function makeThumb(blob: Blob): Promise<{ url: string; ar: number } | null> {
@@ -30,6 +33,9 @@ async function makeThumb(blob: Blob): Promise<{ url: string; ar: number } | null
 
 const PHASE_LABEL: Record<string, string> = {
   queued: 'Queued', running: 'Generating', loading: 'Loading model', finishing: 'Finishing', revealing: 'Done', done: 'Done',
+};
+const STAGE_LINE: Record<string, string> = {
+  planning: 'Understanding your request…', preparing: 'Preparing the edit…', queued: 'Queued…', generating: 'Generating',
 };
 
 export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () => void }) {
@@ -55,8 +61,14 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
   const [err, setErr] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const [count, setCount] = useState(0);
+  // Server-driven edit state: a read-replica of GET /edit/{id}.
+  const [editId, setEditId] = useState<string | null>(null);
+  const [estage, setEstage] = useState('planning');
+  const [editPlan, setEditPlan] = useState<EditPlan | null>(null);
+  const [maskPrev, setMaskPrev] = useState<string | null>(null);
   const startedRef = useRef(0);
   const lastForm = useRef<{ form: FormData; kind: Kind; thumb: string | null; ar: number; plan: PlanSummary | null } | null>(null);
+  const lastEdit = useRef<{ image: Blob; mask: Blob | null; p: InpaintParams } | null>(null);
   const urlRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
@@ -74,13 +86,18 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
     return () => { active = false; window.clearInterval(timer); };
   }, [visible]);
 
-  // Resume a job started before a reload / pane remount: restores the result stage and keeps polling.
+  // Resume after a reload / pane remount. An edit resumes from the server's state (it kept running without us) into the same stage view;
+  // a plain generation resumes its job poll.
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(JOB_KEY) || 'null') as Saved | null;
       if (saved?.id && Date.now() - saved.ts < JOB_MAX_MS) {
-        startedRef.current = saved.ts; setJob(saved.id); setKind(saved.kind ?? 'create'); setStagePrompt(saved.prompt ?? ''); setPrompt(saved.prompt ?? '');
-        setThumb(saved.thumb ?? null); setAr(saved.ar || 1); setStagePlan(saved.plan ?? null); setPhase('queued'); setStage(true);
+        startedRef.current = saved.ts; setKind(saved.kind ?? 'create'); setStagePrompt(saved.prompt ?? ''); setPrompt(saved.prompt ?? '');
+        setThumb(saved.thumb ?? null); setAr(saved.ar || 1); setStagePlan(saved.plan ?? null); setStage(true);
+        if (saved.edit) {
+          setEditId(saved.id); setPhase('running');
+          if (saved.thumb) void fetch(saved.thumb).then(r => r.blob()).then(setEditSource).catch(() => { /* fall back to the plain stage */ });
+        } else { setJob(saved.id); setPhase('queued'); }
       } else localStorage.removeItem(JOB_KEY);
     } catch { /* storage unavailable */ }
   }, []);
@@ -110,6 +127,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
     } catch (e) { setErr(e instanceof Error ? e.message : 'Could not load the finished image.'); setPhase('error'); }
   }, []);
 
+  // Plain generation: poll the job.
   useEffect(() => {
     if (!stage || !job || !polling) return;
     let active = true;
@@ -135,11 +153,26 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
     return () => { active = false; window.clearInterval(timer); };
   }, [stage, job, polling, reveal]);
 
+  // Edit: mirror the server's state. The server plans, selects, prepares and generates on its own; closing the tab loses nothing.
+  useEffect(() => {
+    if (!editId) return;
+    const clear = () => { try { localStorage.removeItem(JOB_KEY); } catch { /* ignore */ } };
+    return watchEdit(editId, s => {
+      setEstage(s.stage);
+      if (s.plan) setEditPlan(s.plan);
+      if (s.mask_preview) setMaskPrev(s.mask_preview);
+      if (s.stage === 'done' && s.output?.job_id) { clear(); setJob(s.output.job_id); void reveal(s.output.job_id); }
+      else if (s.stage === 'error') { clear(); setErr(s.error || 'The edit failed.'); setPhase('error'); }
+      else if (s.stage === 'cancelled') clear();
+      else setPhase(p => (p === 'queued' || p === 'loading' ? 'running' : p));
+    }, msg => { clear(); setErr(msg); setPhase('error'); });
+  }, [editId, reveal]);
+
   async function startJob(form: FormData, k: Kind, th: string | null, ratio: number, plan: PlanSummary | null = null) {
     lastForm.current = { form, kind: k, thumb: th, ar: ratio, plan };
     setStagePlan(plan);
     const p = String(form.get('prompt') ?? '');
-    setErr(''); setCount(0); setJob(null); setResultUrl(null); setRevealed(false); setCompare(false);
+    setErr(''); setCount(0); setJob(null); setEditId(null); setResultUrl(null); setRevealed(false); setCompare(false);
     setKind(k); setThumb(th); setAr(ratio); setStagePrompt(p); setElapsed(0); setPhase('queued'); setStage(true); setEditSource(null);
     startedRef.current = Date.now();
     try {
@@ -159,29 +192,58 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
     const t = file ? await makeThumb(file) : null;
     void startJob(form, file ? 'edit' : 'create', t?.url ?? null, t?.ar ?? 1);
   }
-  async function submitInpaint(image: Blob, mask: Blob, p: InpaintParams) {
+  /** One POST; from here the server owns the pipeline. The editor stays mounted and becomes the stage. */
+  async function startEdit(image: Blob, mask: Blob | null, p: InpaintParams) {
+    lastEdit.current = { image, mask, p };
     const form = new FormData();
-    form.set('prompt', p.prompt); form.set('mode', p.mode);
-    form.set('strength', String(p.strength)); form.set('grow', String(p.grow)); form.set('blend', String(p.blend)); form.set('context', String(p.context));
-    if (p.recolor) form.set('recolor', p.recolor);
-    form.set('image', image, image.type === 'image/png' ? 'source.png' : 'source.jpg'); form.set('mask', mask, 'mask.png');
-    const t = await makeThumb(image); // the clean photo: never the red mask overlay
-    void startJob(form, 'edit', t?.url ?? null, t?.ar ?? 1, p.plan);
+    form.set('instruction', p.instruction);
+    form.set('image', image, image.type === 'image/png' ? 'source.png' : 'source.jpg');
+    if (mask) form.set('mask', mask, 'mask.png');
+    if (p.overrides) form.set('overrides', JSON.stringify(p.overrides));
+    setErr(''); setCount(0); setJob(null); setEditId(null); setResultUrl(null); setRevealed(false); setCompare(false); setEditPlan(null); setMaskPrev(null);
+    setEstage('planning'); setKind('edit'); setStagePrompt(p.instruction); setStagePlan(null); setElapsed(0); setPhase('running'); setStage(true);
+    startedRef.current = Date.now();
+    const th = makeThumb(image); // the clean photo: never the red mask overlay
+    try {
+      const id = await startEditRequest(form);
+      const t = await th; setThumb(t?.url ?? null); if (t) setAr(t.ar);
+      const saved: Saved = { id, ts: startedRef.current, prompt: p.instruction, kind: 'edit', thumb: t?.url ?? null, ar: t?.ar ?? 1, edit: true };
+      try { localStorage.setItem(JOB_KEY, JSON.stringify(saved)); }
+      catch { try { localStorage.setItem(JOB_KEY, JSON.stringify({ ...saved, thumb: null })); } catch { /* ignore */ } }
+      setEditId(id);
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Could not start the edit.'); setPhase('error'); }
+  }
+  function endRun() {
+    try { localStorage.removeItem(JOB_KEY); } catch { /* ignore */ }
+    if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
+    setStage(false); setEditId(null); setJob(null); setResultUrl(null); setRevealed(false); setCompare(false); setErr(''); setPhase('queued'); setEditPlan(null); setMaskPrev(null);
+  }
+  /** Stop and go back to the editor (the same mounted editor un-blurs and its controls return). */
+  function stopEdit() { const id = editId; endRun(); if (id) void cancelEdit(id); }
+  /** Change the plan: cancel the running edit and start a new one with overrides (no modal; same stage). */
+  function rerun(ov: EditOverrides) {
+    const l = lastEdit.current; if (!l) return;
+    if (editId) void cancelEdit(editId);
+    void startEdit(l.image, l.mask, { instruction: l.p.instruction, overrides: ov });
   }
   async function editResult() {
     try {
       const res = await fetch(`${API}?id=${encodeURIComponent(job ?? '')}&image=0`, { cache: 'no-store' });
       if (!res.ok) throw new Error('Could not load that image.');
-      setEditSource(await res.blob());
+      const blob = await res.blob();
+      endRun(); setEditSource(blob);
     } catch (e) { setErr(e instanceof Error ? e.message : 'Could not load that image.'); setPhase('error'); }
   }
   function leave(clearPrompt: boolean) {
-    try { localStorage.removeItem(JOB_KEY); } catch { /* ignore */ }
-    if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
-    setStage(false); setJob(null); setResultUrl(null); setRevealed(false); setErr(''); setPhase('queued'); setFile(null);
+    endRun(); setEditSource(null); setFile(null);
     if (clearPrompt) setPrompt('');
   }
   function retry() {
+    if (kind === 'edit') {
+      const l = lastEdit.current;
+      if (l) void startEdit(l.image, l.mask, l.p); else leave(false);
+      return;
+    }
     const l = lastForm.current;
     if (l) void startJob(l.form, l.kind, l.thumb, l.ar, l.plan); else leave(false);
   }
@@ -189,11 +251,41 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
   const showBlur = phase !== 'done' && !(phase === 'revealing' && revealed);
   const status = PHASE_LABEL[phase] ?? '';
   const dlHref = job ? `${API}?id=${encodeURIComponent(job)}&image=0` : '#';
+  const compareBtn = <button type="button" className={styles.rsGhost} aria-pressed={compare}
+    onPointerDown={() => setCompare(true)} onPointerUp={() => setCompare(false)} onPointerLeave={() => setCompare(false)} onPointerCancel={() => setCompare(false)}
+    onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setCompare(true); } }} onKeyUp={() => setCompare(false)} onBlur={() => setCompare(false)}><Scaling size={16} aria-hidden /> Hold to compare</button>;
+
+  // The single stage for an edit: the editor renders this in place of its controls.
+  const runView: RunView | null = stage && kind === 'edit' && editSource ? (() => {
+    const plan = summary(editPlan);
+    const sk = phase === 'error' ? 'error' : phase === 'finishing' || phase === 'revealing' || phase === 'done' ? phase : estage;
+    const line = phase === 'finishing' ? 'Finishing…' : phase === 'revealing' || phase === 'done' ? 'Done'
+      : estage === 'selecting' ? `Selecting ${editPlan?.target || 'the area'}…` : STAGE_LINE[estage] ?? 'Working…';
+    const hint = !live ? '' : estage === 'planning' ? (elapsed < 20000 ? 'Loading the local model. The first request takes about 80 seconds.' : 'Still working. It keeps going on the server if you close this.')
+      : estage === 'generating' ? 'Usually 4 to 5 minutes. You can leave this open or reload; it keeps going.' : '';
+    const final = phase === 'done' || phase === 'revealing';
+    return {
+      stage: sk, line, time: live ? fmt(elapsed) : '', hint, plan, final, live, failed: phase === 'error', error: err,
+      maskPreview: maskPrev && live && ['preparing', 'queued', 'generating'].includes(estage) && phase !== 'finishing' ? maskPrev : null,
+      resultUrl, resultOn: revealed && !compare, blur: showBlur && !compare,
+      actions: phase === 'error' ? <>
+        <button type="button" className={styles.rsPrimary} onClick={retry}><RotateCcw size={16} aria-hidden /> Retry</button>
+        <button type="button" className={styles.rsGhost} onClick={() => leave(false)}><ArrowLeft size={16} aria-hidden /> Back to create</button></>
+        : final ? <>
+          {inpaint && <button type="button" className={styles.rsPrimary} onClick={() => void editResult()}><Pencil size={16} aria-hidden /> Edit again</button>}
+          <a className={styles.rsGhost} href={dlHref} download={`generated-${job?.slice(0, 8) ?? 'image'}.png`}><Download size={16} aria-hidden /> Download</a>
+          {compareBtn}
+          <button type="button" className={styles.rsGhost} onClick={() => leave(false)}><ArrowLeft size={16} aria-hidden /> Back to create</button>
+          <button type="button" className={styles.rsGhost} onClick={() => leave(true)}><Plus size={16} aria-hidden /> New</button></>
+        : <button type="button" className={styles.rsGhost} onClick={stopEdit}><Square size={14} aria-hidden /> Stop</button>,
+    };
+  })() : null;
 
   return <section className={`${styles.browserPane} ${styles.imagePane}`} style={{ display: visible ? undefined : 'none' }} aria-label="Image generation">
     <header className={styles.imageHeader}><span className={styles.imageTitle}>Image generation</span><button type="button" className={styles.browserPaneClose} onClick={onClose} aria-label="Close image generation"><X size={16}/></button></header>
     <div className={styles.imageContent}>
-      {editSource && <InpaintEditor key={editSource.size + ':' + (editSource as File).lastModified} source={editSource} busy={false} onSubmit={(i, m, p) => void submitInpaint(i, m, p)} onCancel={() => setEditSource(null)} />}
+      {editSource && <InpaintEditor key={editSource.size + ':' + ((editSource as File).lastModified ?? 0)} source={editSource} busy={false} run={runView}
+        onSubmit={(i, m, p) => void startEdit(i, m, p)} onCancel={() => setEditSource(null)} onRerun={lastEdit.current ? ov => rerun(ov) : undefined} />}
       {!editSource && stage && <div className={styles.rs} data-phase={phase} style={{ ['--ar' as string]: ar }}>
         <div className={styles.rsStatus}>
           <p className={styles.rsLine} role="status" aria-live="polite">
@@ -217,9 +309,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
           {(phase === 'done' || phase === 'revealing') && <>
             {inpaint && <button type="button" className={styles.rsPrimary} onClick={() => void editResult()}><Pencil size={16} aria-hidden /> Edit again</button>}
             <a className={styles.rsGhost} href={dlHref} download={`generated-${job?.slice(0, 8) ?? 'image'}.png`}><Download size={16} aria-hidden /> Download</a>
-            {kind === 'edit' && thumb && <button type="button" className={styles.rsGhost} aria-pressed={compare}
-              onPointerDown={() => setCompare(true)} onPointerUp={() => setCompare(false)} onPointerLeave={() => setCompare(false)} onPointerCancel={() => setCompare(false)}
-              onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setCompare(true); } }} onKeyUp={() => setCompare(false)} onBlur={() => setCompare(false)}><Scaling size={16} aria-hidden /> Hold to compare</button>}
+            {kind === 'edit' && thumb && compareBtn}
             <button type="button" className={styles.rsGhost} onClick={() => leave(false)}><ArrowLeft size={16} aria-hidden /> Back to create</button>
             <button type="button" className={styles.rsGhost} onClick={() => leave(true)}><Plus size={16} aria-hidden /> New</button>
           </>}
