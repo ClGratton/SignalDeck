@@ -4,6 +4,9 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import styles from './assistant.module.css';
 
+const JOB_KEY = 'grtlabs.imageJob';
+const JOB_MAX_MS = 30 * 60 * 1000;
+
 export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [img2img, setImg2img] = useState(false);
@@ -15,6 +18,7 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const startedRef = useRef(0);
   useEffect(() => {
     if (!visible) return;
     let active = true;
@@ -25,17 +29,35 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
     const timer = window.setInterval(check, 15000);
     return () => { active = false; window.clearInterval(timer); };
   }, [visible]);
+  // Resume a job that was started before a reload / pane remount.
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(JOB_KEY) || 'null');
+      if (saved?.id && Date.now() - saved.ts < JOB_MAX_MS) { setJob(saved.id); setBusy(true); startedRef.current = saved.ts; }
+      else localStorage.removeItem(JOB_KEY);
+    } catch { /* storage unavailable */ }
+  }, []);
   useEffect(() => {
     if (!job || !busy) return;
     let active = true;
+    let failures = 0;
+    const finish = () => { try { localStorage.removeItem(JOB_KEY); } catch { /* ignore */ } };
     const poll = async () => {
       try {
         const res = await fetch(`/api/assistant/images?id=${encodeURIComponent(job)}`, { cache: 'no-store' });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!active) return;
-        if (!res.ok || data.status === 'error') { setError(data.error || 'Generation failed.'); setBusy(false); }
-        else if (data.status === 'complete') { setCount(data.count); setBusy(false); }
-      } catch { if (active) { setError('Could not contact the image service.'); setBusy(false); } }
+        // 5xx / network errors are transient (the image host can stall for minutes while it loads the model):
+        // keep polling until the job's overall deadline instead of abandoning a job that is still running.
+        if (res.status >= 500 || (res.status === 502)) throw new Error('transient');
+        if (!res.ok || data.status === 'error') { setError(data.error || 'Generation failed.'); setBusy(false); finish(); }
+        else if (data.status === 'complete') { setCount(data.count); setBusy(false); finish(); }
+        else failures = 0;
+      } catch {
+        if (!active) return;
+        failures++;
+        if (Date.now() - startedRef.current > JOB_MAX_MS) { setError('Image generation timed out. Please try again.'); setBusy(false); finish(); }
+      }
     };
     void poll();
     const timer = window.setInterval(poll, 2500);
@@ -48,6 +70,8 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
       const res = await fetch('/api/assistant/images', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not start generation.');
+      startedRef.current = Date.now();
+      try { localStorage.setItem(JOB_KEY, JSON.stringify({ id: data.id, ts: startedRef.current })); } catch { /* ignore */ }
       setJob(data.id);
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not start generation.'); setBusy(false); }
   }
