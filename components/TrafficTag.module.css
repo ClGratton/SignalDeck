@@ -7,6 +7,11 @@
   font-size: var(--text-xs);
   letter-spacing: 0.01em;
   color: var(--muted);
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklch, var(--surface) 60%, transparent);
+  max-width: 100%;
 }
 
 .lanes {

@@ -337,7 +337,7 @@ h3 {
    elements just render in place. With reduced motion they render final too. */
 html.first-load .boot {
   animation: boot-rise var(--dur-boot) var(--ease-out-expo) both;
-  animation-delay: calc(var(--i, 0) * 90ms + 120ms);
+  animation-delay: calc(var(--i, 0) * 45ms + 30ms);
 }
 
 /* ---- Motion utilities (G6). Enter/exit/pop/sheet; one reduced-motion block below. ---- */

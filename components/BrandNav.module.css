@@ -17,6 +17,11 @@
   /* Fades out/in when relocating into the login card (no positional glide). */
   transition: opacity var(--dur) var(--ease-out-quart);
 }
+.brand::after {
+  content: '';
+  position: absolute;
+  inset: -5px -11px; /* 44px-high hit area, same footprint as the bubble */
+}
 .brand[data-dim='true'] {
   opacity: 0;
 }

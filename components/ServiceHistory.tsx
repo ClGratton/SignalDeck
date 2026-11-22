@@ -41,10 +41,12 @@ type Pick = { day: DayStatus; svc: ServiceHistoryData; rect: DOMRect };
 
 function MonthGrid({
   svc,
+  todayKey,
   onShow,
   onHide,
 }: {
   svc: ServiceHistoryData;
+  todayKey: string;
   onShow: (day: DayStatus, svc: ServiceHistoryData, el: HTMLElement) => void;
   onHide: () => void;
 }) {
@@ -77,7 +79,8 @@ function MonthGrid({
             data-cell
             className={`${styles.cell} ${styles.cellBtn} mono tnum`}
             data-level={d.level}
-            aria-label={`${d.date}: ${LEVEL_LABEL[d.level]}`}
+            data-today={d.date === todayKey || undefined}
+            aria-label={`${d.date}: ${LEVEL_LABEL[d.level]}${d.date === todayKey ? ' (today)' : ''}`}
             onMouseEnter={(e) => onShow(d, svc, e.currentTarget)}
             onMouseLeave={onHide}
             onFocus={(e) => onShow(d, svc, e.currentTarget)}
@@ -186,6 +189,10 @@ function Legend() {
           {lv === 'none' ? 'no data' : LEVEL_LABEL[lv].toLowerCase()}
         </span>
       ))}
+      <span className={styles.legendItem}>
+        <span className={styles.swatch} data-today="true" aria-hidden />
+        today
+      </span>
     </div>
   );
 }
@@ -315,18 +322,18 @@ export function ServiceHistory({
         </div>
 
         <div className={styles.stats}>
-          <div className={styles.stat}>
+          <div className={styles.stat} role="group">
             <span className={`${styles.statValue} mono tnum`}>
               {selected.uptimePct}
               <span className={styles.statUnit}>%</span>
             </span>
             <span className={styles.statLabel}>uptime this month</span>
           </div>
-          <div className={styles.stat}>
+          <div className={styles.stat} role="group">
             <span className={`${styles.statValue} mono tnum`}>{selected.incidents}</span>
             <span className={styles.statLabel}>incident days</span>
           </div>
-          <div className={styles.stat}>
+          <div className={styles.stat} role="group">
             <span className={`${styles.statValue} mono tnum`}>
               {selected.streakDays}
               <span className={styles.statUnit}>d</span>
@@ -340,7 +347,7 @@ export function ServiceHistory({
             {monthNav}
             <Legend />
           </div>
-          <MonthGrid svc={selected} onShow={show} onHide={hide} />
+          <MonthGrid svc={selected} todayKey={todayKey} onShow={show} onHide={hide} />
         </div>
       </div>
 
@@ -366,7 +373,7 @@ export function ServiceHistory({
                   ) : null}
                 </span>
               </header>
-              <MonthGrid svc={h} onShow={show} onHide={hide} />
+              <MonthGrid svc={h} todayKey={todayKey} onShow={show} onHide={hide} />
             </article>
           ))}
         </div>

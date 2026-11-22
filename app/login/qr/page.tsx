@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { Button, StateBlock } from '@/components/ui';
 import styles from '../login.module.css';
 
 type Phase = 'loading' | 'confirm' | 'redeeming' | 'invalid' | 'error';
@@ -73,31 +74,55 @@ export default function QrSignInPage() {
         <h1 className={styles.title}>Sign in from desktop</h1>
 
         {phase === 'loading' ? (
-          <p className={styles.sub}>Checking the sign-in link…</p>
-        ) : phase === 'invalid' ? (
-          <p className={styles.sub}>
-            This sign-in link has expired or was already used. Show a fresh QR code on the desktop
-            and scan it again.
+          <p className={styles.sub} role="status">
+            Checking the sign-in link…
           </p>
+        ) : phase === 'invalid' ? (
+          <StateBlock
+            kind="error"
+            title="Link expired"
+            action={
+              <Button variant="secondary" block onClick={() => router.replace('/login')}>
+                Sign in with password
+              </Button>
+            }
+          >
+            This sign-in link has expired or was already used. Links last about a minute and work
+            once. Show a fresh QR code on the desktop and scan it again.
+          </StateBlock>
         ) : (
           <>
-            <p className={styles.sub}>
-              Approve signing this device in to the operator console, requested from{' '}
-              <strong>{sourceLabel}</strong>.
-            </p>
+            <p className={styles.sub}>Approve signing this device in to the operator console.</p>
+            <div className={styles.summary}>
+              <span>Requested from</span>
+              <strong>{sourceLabel}</strong>
+              <span>Approving opens a new session on this device. Nothing else changes.</span>
+            </div>
             {phase === 'error' && errorMsg ? (
               <p className={styles.error} role="alert">
                 {errorMsg}
               </p>
             ) : null}
-            <button
-              type="button"
-              className={styles.submit}
-              onClick={() => void confirm()}
-              disabled={phase === 'redeeming'}
-            >
-              {phase === 'redeeming' ? 'Signing in…' : `Sign in from ${sourceLabel}`}
-            </button>
+            <div className={styles.actions}>
+              <Button
+                variant="primary"
+                size="lg"
+                block
+                loading={phase === 'redeeming'}
+                onClick={() => void confirm()}
+              >
+                {phase === 'redeeming' ? 'Signing in…' : 'Approve sign-in'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="lg"
+                block
+                disabled={phase === 'redeeming'}
+                onClick={() => router.replace('/')}
+              >
+                Cancel
+              </Button>
+            </div>
           </>
         )}
       </div>

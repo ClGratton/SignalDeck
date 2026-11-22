@@ -2,7 +2,8 @@
 
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Check } from 'lucide-react';
+import { ArrowRight, Check, Eye, EyeOff } from 'lucide-react';
+import { Button, IconButton } from '@/components/ui';
 import { signIn, type SignInState } from './actions';
 import styles from './login.module.css';
 
@@ -17,6 +18,7 @@ export function LoginForm({ from, twoFactor }: { from: string; twoFactor: boolea
   // failed attempt and make every retry from the code step unwinnable.
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const pwRef = useRef<HTMLInputElement>(null);
   const codeRef = useRef<HTMLInputElement>(null);
 
@@ -61,45 +63,92 @@ export function LoginForm({ from, twoFactor }: { from: string; twoFactor: boolea
     return () => cancelAnimationFrame(id);
   }, [step]);
 
-  const errorEl = state.error ? (
+  // Throttle message ("Try again in 30s.") becomes a live countdown. The server
+  // owns the throttle; this only mirrors the number it reported.
+  const [wait, setWait] = useState(0);
+  useEffect(() => {
+    const m = state.error?.match(/Try again in (\d+)s/);
+    setWait(m ? Number(m[1]) : 0);
+  }, [state]);
+  useEffect(() => {
+    if (wait <= 0) return;
+    const id = window.setInterval(() => setWait((w) => Math.max(0, w - 1)), 1000);
+    return () => window.clearInterval(id);
+  }, [wait > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  const throttled = wait > 0;
+  const errorText = throttled
+    ? `Too many attempts. Try again in ${wait}s.`
+    : state.error?.startsWith('Too many attempts')
+      ? 'You can try again now.'
+      : state.error;
+
+  // The line is always rendered (reserved height), so an error never shifts the layout.
+  const errorEl = (
     <p id="login-error" className={styles.error} role="alert">
-      {state.error}
+      {errorText}
     </p>
-  ) : null;
+  );
+
+  const submitBtn = (idle: string, busy: string) => (
+    <Button
+      type="submit"
+      variant="primary"
+      size="lg"
+      block
+      className={styles.submit}
+      disabled={pending || state.ok || throttled}
+      loading={pending}
+    >
+      {state.ok ? (
+        <>
+          <Check size={17} strokeWidth={2.4} aria-hidden /> Authenticated
+        </>
+      ) : (
+        <>
+          {pending ? busy : idle}
+          {!pending && <ArrowRight size={17} strokeWidth={2.2} aria-hidden />}
+        </>
+      )}
+    </Button>
+  );
+
+  const pwInput = (props: React.InputHTMLAttributes<HTMLInputElement>) => (
+    <div className={styles.pwWrap}>
+      <input
+        id="password"
+        name="password"
+        type={showPw ? 'text' : 'password'}
+        autoComplete="current-password"
+        className={`${styles.input} ${styles.pwInput}`}
+        placeholder="••••••••••"
+        {...props}
+      />
+      <IconButton
+        className={styles.reveal}
+        label={showPw ? 'Hide password' : 'Show password'}
+        aria-pressed={showPw}
+        onClick={() => setShowPw((v) => !v)}
+      >
+        {showPw ? <EyeOff size={17} aria-hidden /> : <Eye size={17} aria-hidden />}
+      </IconButton>
+    </div>
+  );
 
   // Single-factor fallback when no TOTP secret is configured.
   if (!twoFactor) {
     return (
       <form action={action} className={styles.form}>
         <input type="hidden" name="from" value={from} />
-        <label className={`${styles.label} mono`} htmlFor="password">
-          dashboard password
+        <label className={styles.label} htmlFor="password">
+          Dashboard password
         </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          autoFocus
-          className={styles.input}
-          placeholder="••••••••••"
-          aria-invalid={Boolean(state.error)}
-          aria-describedby={state.error ? 'login-error' : undefined}
-        />
+        {pwInput({
+          autoFocus: true,
+          'aria-invalid': Boolean(state.error),
+          'aria-describedby': state.error ? 'login-error' : undefined,
+        })}
         {errorEl}
-        <button type="submit" className={styles.submit} disabled={pending || state.ok}>
-          {state.ok ? (
-            <>
-              <Check size={17} strokeWidth={2.4} aria-hidden />
-              <span>Authenticated</span>
-            </>
-          ) : (
-            <>
-              <span>{pending ? 'Checking…' : 'Enter console'}</span>
-              <ArrowRight size={17} strokeWidth={2.2} aria-hidden />
-            </>
-          )}
-        </button>
+        {submitBtn('Enter console', 'Checking…')}
       </form>
     );
   }
@@ -111,36 +160,30 @@ export function LoginForm({ from, twoFactor }: { from: string; twoFactor: boolea
         <div className={styles.track}>
           {/* Step 1 — password */}
           <div className={styles.step} inert={step !== 'password'}>
-            <label className={`${styles.label} mono`} htmlFor="password">
-              dashboard password
+            <label className={styles.label} htmlFor="password">
+              Dashboard password
             </label>
-            <input
-              ref={pwRef}
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              className={styles.input}
-              placeholder="••••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
+            {pwInput({
+              ref: pwRef,
+              value: password,
+              onChange: (e) => setPassword(e.target.value),
+              onKeyDown: (e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   advance();
                 }
-              }}
-            />
-            <button type="button" className={styles.submit} onClick={advance}>
-              <span>Continue</span>
+              },
+            } as React.InputHTMLAttributes<HTMLInputElement>)}
+            <Button type="button" variant="primary" size="lg" block className={styles.submit} onClick={advance}>
+              Continue
               <ArrowRight size={17} strokeWidth={2.2} aria-hidden />
-            </button>
+            </Button>
           </div>
 
           {/* Step 2 — authenticator code */}
           <div className={styles.step} inert={step !== 'code'}>
-            <label className={`${styles.label} mono`} htmlFor="code">
-              authentication code
+            <label className={styles.label} htmlFor="code">
+              Authentication code
             </label>
             <input
               ref={codeRef}
@@ -159,19 +202,7 @@ export function LoginForm({ from, twoFactor }: { from: string; twoFactor: boolea
               aria-describedby={state.error ? 'login-error' : undefined}
             />
             {errorEl}
-            <button type="submit" className={styles.submit} disabled={pending || state.ok}>
-              {state.ok ? (
-                <>
-                  <Check size={17} strokeWidth={2.4} aria-hidden />
-                  <span>Authenticated</span>
-                </>
-              ) : (
-                <>
-                  <span>{pending ? 'Verifying…' : 'Enter console'}</span>
-                  <ArrowRight size={17} strokeWidth={2.2} aria-hidden />
-                </>
-              )}
-            </button>
+            {submitBtn('Enter console', 'Verifying…')}
           </div>
         </div>
       </div>

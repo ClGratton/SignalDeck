@@ -18,6 +18,11 @@
     box-shadow var(--dur) var(--ease-out-quart);
 }
 
+.track::after {
+  content: '';
+  position: absolute;
+  inset: -9px -4px; /* 44px-high hit area; the visual stays 48x26 */
+}
 .track:hover {
   border-color: var(--border-strong);
 }

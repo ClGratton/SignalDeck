@@ -46,9 +46,19 @@ export function StatusPulse() {
   const [now, setNow] = useState(checkedAtMs);
 
   useEffect(() => {
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
+    // Tick only while the tab is visible; resync the moment it comes back.
+    let id = 0;
+    const start = () => {
+      setNow(Date.now());
+      window.clearInterval(id);
+      if (document.visibilityState === 'visible') id = window.setInterval(() => setNow(Date.now()), 1000);
+    };
+    start();
+    document.addEventListener('visibilitychange', start);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', start);
+    };
   }, []);
 
   // Hover/focus popover listing each system + its uptime.
@@ -84,6 +94,7 @@ export function StatusPulse() {
       <span className={styles.sep} aria-hidden>
         ·
       </span>
+      <span className={styles.meta}>
       <button
         ref={triggerRef}
         type="button"
@@ -135,6 +146,7 @@ export function StatusPulse() {
         ) : (
           formatChecked(secondsAgo)
         )}
+      </span>
       </span>
     </div>
   );

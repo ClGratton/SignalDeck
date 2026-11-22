@@ -89,6 +89,7 @@
 }
 .trafficRow {
   margin-top: var(--space-3xs);
+  max-width: 100%;
 }
 /* Collapse entirely when the Cloudflare integration is off (TrafficTag renders null). */
 .trafficRow:empty {
@@ -108,6 +109,7 @@
   margin: var(--space-2xs) 0 0;
   padding: 0;
   width: 100%;
+  align-items: stretch;
 }
 .spec {
   flex: 1 1 6.5rem;
@@ -159,8 +161,8 @@
 .loadBar {
   position: absolute;
   inset: auto 0 0 0;
-  height: 3px;
-  background: color-mix(in oklch, var(--border) 70%, transparent);
+  height: 4px;
+  background: color-mix(in oklch, var(--border-strong) 60%, transparent);
 }
 .loadBar::after {
   content: '';
@@ -237,16 +239,25 @@
   flex-wrap: wrap;
 }
 .link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
   font-size: var(--text-sm);
   color: var(--muted);
-  transition: color var(--dur) var(--ease-out-quart);
+  text-decoration: underline transparent;
+  text-underline-offset: 3px;
+  transition:
+    color var(--dur) var(--ease-out-quart),
+    text-decoration-color var(--dur) var(--ease-out-quart);
 }
-.link:hover {
+.link:hover,
+.link:focus-visible {
   color: var(--accent-ink);
+  text-decoration-color: currentColor;
 }
 .version {
   font-size: var(--text-xs);
-  color: var(--border-strong);
+  color: var(--muted);
 }
 
 @media (max-width: 640px) {
@@ -310,5 +321,15 @@
   .link,
   .version {
     font-size: var(--text-xs);
+  }
+}
+
+/* Very small phones: two tiles per row instead of three cramped ones. */
+@media (max-width: 380px) {
+  .spec {
+    flex-basis: calc(50% - var(--space-2xs));
+  }
+  .tagline {
+    font-size: var(--text-sm);
   }
 }
