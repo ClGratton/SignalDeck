@@ -19,6 +19,15 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
+# 2b) sam: in-browser auto-select model (SAM 2.1 Hiera-Tiny, Apache-2.0), pinned to an
+# exact Hugging Face revision and verified by sha256. Never committed to git.
+FROM node:22-slim AS sam
+ARG SAM_REV=f8b86bc94790f7ef78f03a30f73863e741bb6936
+ARG SAM_DIR=sam2.1-tiny-f8b86bc
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /sam
+RUN set -eux; d=/sam/${SAM_DIR}; mkdir -p $d;     base=https://huggingface.co/Cr7z676/sam2.1-hiera-tiny-onnx/resolve/${SAM_REV};     curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o $d/encoder.ort $base/sam2.1-tiny-encoder.ort;     curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o $d/decoder.onnx $base/sam2.1-tiny-decoder.onnx;     echo "6e25853672e5dbaad02ce65ef129ad2e034e211d69d0b6b800dc010dc28b5f27  $d/encoder.ort" | sha256sum -c -;     echo "cf39f03d6093db5ffee1acfc1cf6ab87e177459648e58a21030e256a3e1c7553  $d/decoder.onnx" | sha256sum -c -
+
 # 3) run — minimal runtime
 FROM node:22-slim AS run
 WORKDIR /app
@@ -53,6 +62,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
+COPY --from=sam /sam ./public/models
 
 # `playwright-core` reads runtime assets (including browsers.json) with ordinary
 # Node resolution. Next's standalone file tracer only copies the JS files it can

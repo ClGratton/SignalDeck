@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { NextResponse, type NextRequest } from 'next/server';
 import { hasValidSession } from '@/lib/session';
 
@@ -8,6 +9,26 @@ const base = () => process.env.COMFYUI_URL?.replace(/\/$/, '');
 const workflowPath = () => process.env.COMFYUI_WORKFLOW_PATH;
 const imageWorkflowPath = () => process.env.COMFYUI_IMG2IMG_WORKFLOW_PATH;
 const imageEnabled = () => !!imageWorkflowPath();
+// Inpaint template: explicit env, else next to the img2img template (same mounted provider dir).
+const inpaintWorkflowPath = () => process.env.COMFYUI_INPAINT_WORKFLOW_PATH
+  || (imageWorkflowPath() ? join(dirname(imageWorkflowPath()!), 'lustify-inpaint-template.json') : undefined);
+const MODES = {
+  recolor: { strength: 0.55, grow: 8, blend: 28, context: 1.5 },
+  replace: { strength: 0.85, grow: 8, blend: 28, context: 1.5 },
+  remove: { strength: 1.0, grow: 10, blend: 28, context: 2.0 },
+} as const;
+const num = (v: FormDataEntryValue | null, def: number, min: number, max: number, int = false) => {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : def;
+  if (!Number.isFinite(n)) return def;
+  const c = Math.min(max, Math.max(min, n));
+  return int ? Math.round(c) : c;
+};
+function fillInpaint(value: unknown, map: Record<string, string | number>): unknown {
+  if (typeof value === 'string' && value in map) return map[value];
+  if (Array.isArray(value)) return value.map(v => fillInpaint(v, map));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fillInpaint(v, map)]));
+  return value;
+}
 const json = (error: string, status: number) => NextResponse.json({ error }, { status });
 function providerError(status: number) {
   if (status === 409 || status === 429) return json('The image service is busy. Please try again shortly.', status);
@@ -69,7 +90,9 @@ export async function GET(req: NextRequest) {
   if (!id) {
     const text = await capability(workflowPath());
     const reference = imageEnabled() ? await capability(imageWorkflowPath()) : { available: false };
-    return NextResponse.json({ configured: text.available, reason: text.reason, img2img: reference.available });
+    const ip = inpaintWorkflowPath();
+    const inpaint = ip && base() ? await capability(ip) : { available: false };
+    return NextResponse.json({ configured: text.available, reason: text.reason, img2img: reference.available, inpaint: inpaint.available });
   }
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return json('Invalid job ID.', 400);
   try {
@@ -95,12 +118,15 @@ export async function POST(req: NextRequest) {
   if (!base() || !workflowPath()) return json('Image generation is not configured.', 503);
   try {
     const length = Number(req.headers.get('content-length') ?? 0);
-    if (length > 11 * 1024 * 1024) return json('Request exceeds 11 MB.', 413);
+    if (length > 17 * 1024 * 1024) return json('Request exceeds 17 MB.', 413);
     const form = await req.formData();
     const prompt = form.get('prompt');
     if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 4000) return json('Enter a prompt of up to 4000 characters.', 400);
     const file = form.get('image');
+    const mask = form.get('mask');
+    if (mask) return await startInpaint(prompt.trim(), file, mask, form);
     if (file && (!(file instanceof File) || !imageEnabled())) return json('Base images are not enabled.', 400);
+    if (file instanceof File && file.size > 10 * 1024 * 1024) return json('Choose a PNG, JPEG or WebP up to 10 MB.', 400);
     const ready = await capability(file instanceof File ? imageWorkflowPath() : workflowPath());
     if (!ready.available) return json(ready.reason ?? 'Image generation is unavailable.', 503);
     let image: string | null = null;
@@ -123,4 +149,42 @@ export async function POST(req: NextRequest) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.prompt_id ?? '')) throw new Error('invalid response');
     return NextResponse.json({ id: payload.prompt_id });
   } catch { return json('The image service is temporarily unavailable.', 503); }
+}
+
+const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+async function startInpaint(prompt: string, file: FormDataEntryValue | null, mask: FormDataEntryValue, form: FormData) {
+  const ip = inpaintWorkflowPath();
+  if (!ip) return json('Inpainting is not configured.', 503);
+  if (!(file instanceof File) || !(mask instanceof File)) return json('Send both an image and a mask.', 400);
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 12 * 1024 * 1024 || file.size < 100) return json('Choose a PNG, JPEG or WebP up to 12 MB.', 400);
+  if (mask.type !== 'image/png' || mask.size > 4 * 1024 * 1024 || mask.size < 60) return json('The mask must be a PNG up to 4 MB.', 400);
+  const head = new Uint8Array(await mask.slice(0, 8).arrayBuffer());
+  if (!PNG_SIG.every((b, i) => head[i] === b)) return json('The mask must be a PNG.', 400);
+  const ready = await capability(ip);
+  if (!ready.available) return json(ready.reason ?? 'Inpainting is unavailable.', 503);
+  const modeKey = String(form.get('mode') ?? 'recolor');
+  const d = MODES[(modeKey in MODES ? modeKey : 'recolor') as keyof typeof MODES];
+  const strength = num(form.get('strength'), d.strength, 0.05, 1);
+  const grow = num(form.get('grow'), d.grow, 0, 64, true);
+  const blend = num(form.get('blend'), d.blend, 0, 128, true);
+  const context = num(form.get('context'), d.context, 1, 3);
+  const ext = file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg';
+  const upload = new FormData();
+  upload.set('image', file, `inpaint-${crypto.randomUUID()}.${ext}`);
+  upload.set('mask', mask, `mask-${crypto.randomUUID()}.png`);
+  const up = await comfy('/upload/inpaint', { method: 'POST', body: upload });
+  if (up.status === 400) return json('The image or mask was rejected (size 64-3072 px, at least one selected pixel, mask must match the image).', 400);
+  if (!up.ok) return providerError(up.status);
+  const handles = await up.json();
+  if (typeof handles.image !== 'string' || typeof handles.mask !== 'string') throw new Error('bad upload response');
+  const raw = await readFile(ip, 'utf8');
+  const workflow = fillInpaint(JSON.parse(raw), {
+    '{{PROMPT}}': prompt, '{{SEED}}': Math.floor(Math.random() * 2 ** 32), '{{IMAGE}}': handles.image, '{{MASK}}': handles.mask,
+    '{{STRENGTH}}': strength, '{{GROW}}': grow, '{{BLEND}}': blend, '{{CONTEXT}}': context,
+  });
+  const result = await comfy('/prompt', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: workflow }) });
+  if (!result.ok) return providerError(result.status);
+  const payload = await result.json();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.prompt_id ?? '')) throw new Error('invalid response');
+  return NextResponse.json({ id: payload.prompt_id });
 }

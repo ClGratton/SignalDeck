@@ -24,7 +24,12 @@ const nextConfig = {
   // Baseline security headers on every response. Browsers ignore HSTS over plain
   // HTTP, so it's inert in dev and active behind Cloudflare's TLS in production.
   async headers() {
+    // Self-hosted, content-addressed assets (model dir name carries the pinned revision;
+    // the ORT runtime only changes with a dependency bump + rebuild): cache hard.
+    const immutable = [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }];
     return [
+      { source: '/models/:path*', headers: immutable },
+      { source: '/vendor/ort/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=86400' }] },
       {
         source: '/:path*',
         headers: [

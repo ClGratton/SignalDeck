@@ -4,7 +4,9 @@
   "description": "A personal homelab dashboard featuring a public status landing page and an authenticated operator console.",
   "private": true,
   "scripts": {
+    "predev": "node scripts/vendor-ort.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/vendor-ort.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -15,6 +17,7 @@
     "@fontsource-variable/spline-sans-mono": "^5.2.8",
     "lucide-react": "^1.17.0",
     "next": "^16.2.7",
+    "onnxruntime-web": "^1.22.0",
     "playwright-core": "^1.62.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.7",
