@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Brush, CircleMinus, Eraser, FlipHorizontal2, LoaderCircle, Sparkles, Trash2, Undo2, Wand2, X } from 'lucide-react';
 import styles from './assistant.module.css';
 import { embedImage, predictMask, type Box, type Embedding } from '@/lib/segment-client';
+import { IDENTITY, clampView, gestureView, screenToImage, zoomAt, type View } from '@/lib/view-transform';
 import { encodeMaskPng } from '@/lib/png-mask';
 import { requestPlan, type Plan } from '@/lib/plan-client';
 import { Button, Chip, Field } from '@/components/ui';
@@ -51,6 +52,18 @@ export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
   const undo = useRef<Uint8Array[]>([]);
   const drawing = useRef<{ x: number; y: number } | null>(null);
   const boxDrag = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // Zoom/pan of the PICTURE only: CSS transform on a wrapper (canvases never resized).
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef<HTMLDivElement>(null);
+  const view = useRef<View>(IDENTITY);
+  const raf = useRef(0);
+  const touches = useRef(new Map<number, { x: number; y: number }>());
+  const gesture = useRef<{ t: number; moved: boolean } | null>(null);
+  const lastTwoTap = useRef(0);
+  const tap = useRef<{ x: number; y: number; cx: number; cy: number } | null>(null);
+  const panning = useRef<{ x: number; y: number } | null>(null);
+  const spaceDown = useRef(false);
+  const [zoomK, setZoomK] = useState(1);
   const emb = useRef<Embedding | null>(null);
   const [ready, setReady] = useState(false);
   const [aspect, setAspect] = useState('');
@@ -143,38 +156,118 @@ export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
   function clearMask() { snapshot(); mask.current.fill(0); repaintAll(); }
   function invertMask() { snapshot(); const m = mask.current; for (let i = 0; i < m.length; i++) m[i] = m[i] ? 0 : 1; repaintAll(); }
 
-  const toImage = (cx: number, cy: number) => {
-    const r = maskRef.current!.getBoundingClientRect();
-    return { x: (cx - r.left) * dims.current.w / r.width, y: (cy - r.top) * dims.current.h / r.height, scale: dims.current.w / r.width };
+  const vbox = () => viewportRef.current!.getBoundingClientRect(); // untransformed: the transform sits on the child
+  const toImage = (cx: number, cy: number) => screenToImage(view.current, vbox(), dims.current, cx, cy);
+  const applyView = (v: View) => {
+    const r = vbox(); view.current = clampView(v, r.width, r.height);
+    if (raf.current) return;
+    raf.current = requestAnimationFrame(() => {
+      raf.current = 0; const { k, tx, ty } = view.current;
+      if (zoomRef.current) zoomRef.current.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+      setZoomK(Math.round(k * 100) / 100);
+    });
   };
+  const resetView = () => applyView(IDENTITY);
+  // Brush radius in image px: constant on SCREEN while zoomed (size is the on-screen size at 1x).
+  const brushR = () => size / 2 / view.current.k;
+  const local = (cx: number, cy: number) => { const r = vbox(); return { x: cx - r.left, y: cy - r.top }; };
+  useEffect(() => {
+    const el = viewportRef.current; if (!el) return;
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect(), f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015) * (e.deltaMode === 1 ? 16 : 1));
+      applyView(zoomAt(view.current, r.width, r.height, { x: e.clientX - r.left, y: e.clientY - r.top }, f));
+    };
+    const stop = (e: Event) => e.preventDefault();               // Safari page-pinch
+    const tm = (e: TouchEvent) => { if (e.touches.length > 1) e.preventDefault(); };
+    const key = (e: KeyboardEvent) => { if (e.code === 'Space' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test((e.target as HTMLElement)?.tagName ?? '')) { spaceDown.current = e.type === 'keydown'; if (e.type === 'keydown' && el.matches(':hover')) e.preventDefault(); } };
+    el.addEventListener('wheel', wheel, { passive: false });
+    for (const t of ['gesturestart', 'gesturechange', 'gestureend']) el.addEventListener(t, stop as EventListener);
+    el.addEventListener('touchmove', tm, { passive: false });
+    window.addEventListener('keydown', key); window.addEventListener('keyup', key);
+    return () => {
+      el.removeEventListener('wheel', wheel); for (const t of ['gesturestart', 'gesturechange', 'gestureend']) el.removeEventListener(t, stop as EventListener);
+      el.removeEventListener('touchmove', tm); window.removeEventListener('keydown', key); window.removeEventListener('keyup', key);
+      if (raf.current) cancelAnimationFrame(raf.current);
+    };
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
   const stamp = (cx: number, cy: number, r: number, val: number) => {
     const { w, h } = dims.current; const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w, Math.ceil(cx + r) + 1);
     const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(h, Math.ceil(cy + r) + 1); const r2 = r * r; const m = mask.current;
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const dx = x - cx, dy = y - cy; if (dx * dx + dy * dy <= r2) m[y * w + x] = val; }
   };
   const strokeTo = (x: number, y: number) => {
-    const from = drawing.current!; const r = size / 2, val = tool === 'erase' ? 0 : 1;
+    const from = drawing.current!; const r = brushR(), val = tool === 'erase' ? 0 : 1;
     const d = Math.hypot(x - from.x, y - from.y), n = Math.max(1, Math.ceil(d / Math.max(1, r / 3)));
     for (let i = 1; i <= n; i++) stamp(from.x + (x - from.x) * i / n, from.y + (y - from.y) * i / n, r, val);
     paintRect(Math.floor(Math.min(from.x, x) - r) - 1, Math.floor(Math.min(from.y, y) - r) - 1, Math.ceil(Math.max(from.x, x) + r) + 2, Math.ceil(Math.max(from.y, y) + r) + 2);
     drawing.current = { x, y };
   };
   const paintTool = tool === 'brush' || tool === 'erase';
+  const brushCursor = (x: number, y: number) => {
+    const c = prevRef.current!; const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, c.width, c.height);
+    const k = view.current.k; ctx.setLineDash([]); ctx.lineWidth = 2 * c.width / (vbox().width * k);
+    ctx.beginPath(); ctx.arc(x, y, brushR(), 0, Math.PI * 2); ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.stroke();
+  };
+  function cancelStroke() { // a second finger arrived: undo the half-made stroke, it was the start of a pinch
+    if (drawing.current) { drawing.current = null; const s = undo.current.pop(); if (s) { mask.current = s; setUndoCount(undo.current.length); repaintAll(); } }
+    tap.current = null; boxDrag.current = null; clearOverlay();
+  }
   function onDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (e.pointerType === 'touch') {
+      touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+      if (touches.current.size >= 2) { if (!gesture.current) { cancelStroke(); gesture.current = { t: performance.now(), moved: false }; } return; }
+    } else if (e.button === 1 || spaceDown.current) {
+      e.preventDefault(); panning.current = { x: e.clientX, y: e.clientY };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* */ } return;
+    }
     if (!ready || busy || working) return;
     setCount(null);
-    e.currentTarget.setPointerCapture(e.pointerId);
+    if (e.pointerType !== 'touch') { try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* */ } }
     const p = toImage(e.clientX, e.clientY);
+    if (e.pointerType === 'touch' && !paintTool) { tap.current = { x: p.x, y: p.y, cx: e.clientX, cy: e.clientY }; return; } // touch: tap only, no box
     if (!paintTool) { boxDrag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; return; }
-    snapshot(); drawing.current = { x: p.x, y: p.y }; stamp(p.x, p.y, size / 2, tool === 'erase' ? 0 : 1);
-    paintRect(Math.floor(p.x - size / 2) - 1, Math.floor(p.y - size / 2) - 1, Math.ceil(p.x + size / 2) + 2, Math.ceil(p.y + size / 2) + 2);
+    snapshot(); drawing.current = { x: p.x, y: p.y }; stamp(p.x, p.y, brushR(), tool === 'erase' ? 0 : 1);
+    paintRect(Math.floor(p.x - brushR()) - 1, Math.floor(p.y - brushR()) - 1, Math.ceil(p.x + brushR()) + 2, Math.ceil(p.y + brushR()) + 2);
+    brushCursor(p.x, p.y);
   }
   function onMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (e.pointerType === 'touch' && touches.current.has(e.pointerId)) {
+      const prev = [...touches.current.values()]; const ids = [...touches.current.keys()];
+      touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (gesture.current) {
+        if (prev.length >= 2 && ids.indexOf(e.pointerId) < 2) {
+          const [a0, b0] = prev; const [a1, b1] = [...touches.current.values()];
+          const m0 = local((a0.x + b0.x) / 2, (a0.y + b0.y) / 2), m1 = local((a1.x + b1.x) / 2, (a1.y + b1.y) / 2);
+          const d0 = Math.hypot(a0.x - b0.x, a0.y - b0.y), d1 = Math.hypot(a1.x - b1.x, a1.y - b1.y);
+          const r = vbox(); applyView(gestureView(view.current, r.width, r.height, m0, m1, d0 > 4 ? d1 / d0 : 1));
+          if (Math.hypot(m1.x - m0.x, m1.y - m0.y) > 0.5 || Math.abs(d1 - d0) > 0.5) gesture.current.moved = true;
+        }
+        return;
+      }
+      if (tap.current && Math.hypot(e.clientX - tap.current.cx, e.clientY - tap.current.cy) > 10) tap.current = null;
+    }
+    if (panning.current) { const v = view.current; applyView({ ...v, tx: v.tx + e.clientX - panning.current.x, ty: v.ty + e.clientY - panning.current.y }); panning.current = { x: e.clientX, y: e.clientY }; return; }
     const p = toImage(e.clientX, e.clientY);
     if (!paintTool) { if (boxDrag.current) { boxDrag.current.x1 = p.x; boxDrag.current.y1 = p.y; drawBox(boxDrag.current); } return; }
     if (drawing.current) strokeTo(p.x, p.y);
+    if (e.pointerType !== 'touch' || drawing.current) brushCursor(p.x, p.y);
   }
   function onUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (e.pointerType === 'touch') {
+      touches.current.delete(e.pointerId);
+      if (gesture.current) {
+        if (touches.current.size === 0) { // all fingers up: a quick still two-finger tap, twice, resets the zoom
+          const g = gesture.current; gesture.current = null;
+          if (!g.moved && performance.now() - g.t < 350 && e.type === 'pointerup') { const n = performance.now(); if (n - lastTwoTap.current < 500) { resetView(); lastTwoTap.current = 0; } else lastTwoTap.current = n; }
+        }
+        return;
+      }
+      if (tap.current && e.type === 'pointerup') { const t = tap.current; tap.current = null; void segment([{ x: t.x, y: t.y, label: 1 }], null, tool === 'subtract'); return; }
+      tap.current = null;
+    }
+    if (panning.current) { panning.current = null; return; }
     if (!paintTool && boxDrag.current) {
       const b = boxDrag.current; boxDrag.current = null; clearOverlay(); const p = toImage(e.clientX, e.clientY);
       const sub = tool === 'subtract' || e.altKey || e.button === 2;
@@ -183,15 +276,16 @@ export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
       return;
     }
     drawing.current = null;
+    if (e.pointerType === 'touch') clearOverlay();
   }
   const clearOverlay = () => { const c = prevRef.current!; c.getContext('2d')!.clearRect(0, 0, c.width, c.height); };
   function drawBox(b: { x0: number; y0: number; x1: number; y1: number }) {
     const c = prevRef.current!; const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, c.width, c.height);
-    ctx.strokeStyle = 'rgb(255,255,255)'; ctx.lineWidth = Math.max(2, c.width / 400); ctx.setLineDash([8, 6]); ctx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+    ctx.strokeStyle = 'rgb(255,255,255)'; ctx.lineWidth = Math.max(2, c.width / 400) / view.current.k; ctx.setLineDash([8 / view.current.k, 6 / view.current.k]); ctx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
   }
   function flashPoint(x: number, y: number) {
     const c = prevRef.current!; const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, c.width, c.height);
-    ctx.beginPath(); ctx.arc(x, y, Math.max(6, c.width / 120), 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, Math.max(6, c.width / 120) / view.current.k, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill();
     window.setTimeout(clearOverlay, 450);
   }
 
@@ -296,10 +390,13 @@ export function InpaintEditor({ source, busy, onSubmit, onCancel }: {
     </div>
     {paintTool && <label className={styles.edSize}><span>Size</span><input type="range" min={4} max={200} value={size} onChange={e => setSize(Number(e.target.value))} aria-label="Brush size" /><output>{size}</output></label>}
     <div className={styles.edStage}>
-      <div className={styles.edCanvas} data-working={working || undefined} style={{ aspectRatio: aspect || undefined, width: dims.current.w ? `min(100%, calc(62dvh * ${dims.current.w / dims.current.h}))` : undefined, cursor: paintTool ? 'cell' : 'crosshair' }}>
-        <canvas ref={imgRef} className={styles.edLayer} />
-        <canvas ref={maskRef} className={`${styles.edLayer} ${styles.edMask}`} />
-        <canvas ref={prevRef} className={styles.edLayer} data-testid="inpaint-surface" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onContextMenu={e => e.preventDefault()} />
+      <div ref={viewportRef} className={styles.edCanvas} data-testid="inpaint-viewport" data-working={working || undefined} style={{ aspectRatio: aspect || undefined, width: dims.current.w ? `min(100%, calc(62dvh * ${dims.current.w / dims.current.h}))` : undefined, cursor: paintTool ? 'cell' : 'crosshair' }}>
+        <div ref={zoomRef} className={styles.edZoom} data-testid="inpaint-zoom">
+          <canvas ref={imgRef} className={styles.edLayer} />
+          <canvas ref={maskRef} className={`${styles.edLayer} ${styles.edMask}`} />
+          <canvas ref={prevRef} className={styles.edLayer} data-testid="inpaint-surface" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={e => { if (e.pointerType !== 'touch' && !drawing.current) clearOverlay(); }} onContextMenu={e => e.preventDefault()} />
+        </div>
+        {zoomK > 1 && <button type="button" className={styles.edFit} onClick={resetView} aria-label="Fit picture to view" title="Fit picture to view">Fit · {zoomK.toFixed(1)}×</button>}
         {!ready && !err && <span className={styles.edLoading}><LoaderCircle size={16} aria-hidden /> Loading photo</span>}
         {working && <div className={styles.edWork} role="status" aria-live="polite">
           <p className={styles.edWorkLine}><LoaderCircle size={16} aria-hidden /> {flow === 'planning' ? 'Understanding your request…' : 'Selecting…'}<span className={styles.edPlanMeta}>{fmtS(flowMs)}</span></p>
