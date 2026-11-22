@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { LoaderCircle, X } from 'lucide-react';
+import { ImagePlus, LoaderCircle, Pencil, X } from 'lucide-react';
 import styles from './assistant.module.css';
 import { InpaintEditor, type InpaintParams } from './InpaintEditor';
 
@@ -104,14 +104,17 @@ export function ImagePane({ visible, onClose }: { visible: boolean; onClose: () 
       {editSource ? null : <form onSubmit={generate} className={styles.imageForm}>
         <label htmlFor="image-prompt">Prompt</label>
         <textarea id="image-prompt" value={prompt} onChange={e => setPrompt(e.target.value)} maxLength={4000} placeholder="Describe the image you want to create" rows={4} />
-        {img2img && <label className={styles.imageUpload}>Base image <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => setFile(e.target.files?.[0] ?? null)} />{file && <button type="button" onClick={() => { setFile(null); if (inputRef.current) inputRef.current.value = ''; }}>Remove</button>}</label>}
-        <button type="submit" disabled={!configured || busy || !prompt.trim()}>{busy ? 'Generating' : 'Generate'}</button>
+        <div className={styles.imageRow}>
+          <button type="submit" disabled={!configured || busy || !prompt.trim() || (!!file && !inpaint)}>{busy ? 'Generating' : 'Generate'}</button>
+          {inpaint
+            ? <label className={styles.imagePick}><ImagePlus size={16} aria-hidden /> Upload to edit<input ref={editInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { const f = e.target.files?.[0]; if (f) setEditSource(f); e.target.value = ''; }} /></label>
+            : img2img && <label className={styles.imagePick}><ImagePlus size={16} aria-hidden /> {file ? file.name : 'Base image'}<input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>}
+        </div>
         {configured === false && <p role="status" className={styles.imageNote}>{unavailable}</p>}
-        {inpaint && <label className={styles.imageUpload}>Edit a photo (select parts to change) <input ref={editInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { const f = e.target.files?.[0]; if (f) setEditSource(f); e.target.value = ''; }} /></label>}
       </form>}
       {error && <p role="alert" className={styles.imageError}>{error}</p>}
       {busy && <p role="status" className={`${styles.browserLoading} ${styles.imageBusy}`}><LoaderCircle size={15} aria-hidden /> Generating your image. This may take a few minutes.</p>}
-      {job && count > 0 && <div className={styles.imageResults}>{Array.from({ length: count }, (_, i) => <figure key={i}><img src={`/api/assistant/images?id=${encodeURIComponent(job)}&image=${i}`} alt={`Generated image ${i + 1}`} />{inpaint && !busy && <button type="button" className={styles.imageEdit} onClick={() => void editResult(i)}>Edit this image</button>}<a href={`/api/assistant/images?id=${encodeURIComponent(job)}&image=${i}`} download={`generated-${i + 1}.png`}>Download</a></figure>)}</div>}
+      {job && count > 0 && <div className={styles.imageResults}>{Array.from({ length: count }, (_, i) => <figure key={i}><img src={`/api/assistant/images?id=${encodeURIComponent(job)}&image=${i}`} alt={`Generated image ${i + 1}`} />{inpaint && !busy && <button type="button" className={styles.imageEdit} onClick={() => void editResult(i)}><Pencil size={14} aria-hidden /> Edit</button>}<a href={`/api/assistant/images?id=${encodeURIComponent(job)}&image=${i}`} download={`generated-${i + 1}.png`}>Download</a></figure>)}</div>}
     </div>
   </section>;
 }

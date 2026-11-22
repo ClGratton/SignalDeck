@@ -2093,31 +2093,55 @@
 @media (max-width: 1100px) { .imagePane { z-index: calc(var(--z-header) + 4); } }
 
 /* Inpaint editor (image pane) */
-.inpaint { display: grid; gap: var(--space-2xs); max-width: 60rem; }
-.inpaint label { font-size: var(--text-sm); color: var(--ink); }
-.inpaint textarea { resize: vertical; padding: 0.45rem 0.6rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--ink-strong); font: inherit; font-size: var(--text-sm); }
-.inpaint textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.inpaintTools, .inpaintAuto, .inpaintActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs); }
-.inpaintTools button, .inpaintAuto button, .inpaintActions button { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.6rem; min-height: 2.25rem; font-size: var(--text-xs); color: var(--ink); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); cursor: pointer; }
-.inpaintTools button:hover:not(:disabled), .inpaintAuto button:hover:not(:disabled), .inpaintActions button:hover:not(:disabled) { border-color: var(--accent); color: var(--ink-strong); }
-.inpaintTools button[aria-pressed='true'] { border-color: var(--accent); background: color-mix(in oklch, var(--accent) 16%, var(--surface)); color: var(--ink-strong); }
-.inpaintTools button:disabled, .inpaintAuto button:disabled, .inpaintActions button:disabled { opacity: 0.4; cursor: default; }
-.inpaintTools button:focus-visible, .inpaintAuto button:focus-visible, .inpaintActions button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.inpaintActions .inpaintGo { color: var(--on-accent); background: var(--accent); border: 0; font-weight: 600; }
-.inpaintActions .inpaintGo:hover:not(:disabled) { background: var(--accent-strong); color: var(--on-accent); }
-.inpaintSize, .inpaintToggle { display: inline-flex; align-items: center; gap: 0.35rem; font-size: var(--text-xs); }
-.inpaintSize input { width: 7rem; }
-.inpaintStage { display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2xs); }
-.inpaintCanvasWrap { position: relative; width: 100%; max-width: 100%; margin: 0 auto; touch-action: none; user-select: none; }
-.inpaintLayer { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
-.inpaintMask { opacity: 0.5; pointer-events: none; }
-.inpaintLoading { position: absolute; inset: 0; display: grid; place-items: center; font-size: var(--text-sm); color: var(--muted); }
-.inpaintModes { display: flex; flex-wrap: wrap; gap: var(--space-sm); border: 0; padding: 0; margin: 0; }
-.inpaintModes legend { font-size: var(--text-sm); color: var(--ink); padding: 0; margin-bottom: 0.2rem; }
-.inpaintAdv { font-size: var(--text-sm); }
-.inpaintAdv summary { cursor: pointer; color: var(--ink); }
-.inpaintAdv label { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.3rem; }
-.inpaintAdv input[type='range'] { flex: 1; max-width: 16rem; }
-.imageEdit { margin-top: var(--space-2xs); display: inline-flex; margin-right: var(--space-sm); padding: 0.2rem 0.5rem; font-size: var(--text-xs); color: var(--ink); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); cursor: pointer; }
-.imageEdit:hover { border-color: var(--accent); }
+.ed { display: grid; gap: var(--space-xs); max-width: 60rem; }
+.ed button { font: inherit; cursor: pointer; }
+.ed button:focus-visible, .edPrompt:focus-visible, .edAdv summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ed button:disabled { opacity: 0.4; cursor: default; }
+.edBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2xs); }
+.edSeg, .edSeg3 { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 2px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.edSeg { flex: 1 1 18rem; }
+.edSeg button, .edSeg3 button { display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem; min-height: 2.5rem; padding: 0.3rem 0.5rem; font-size: var(--text-sm); font-weight: 550; color: var(--muted); background: transparent; border: 0; border-radius: var(--radius-xs); transition: background var(--dur-fast), color var(--dur-fast); }
+.edSeg button:hover:not(:disabled), .edSeg3 button:hover:not(:disabled) { color: var(--ink-strong); }
+.edSeg button[aria-pressed='true'], .edSeg3 button[aria-pressed='true'] { color: var(--ink-strong); background: var(--surface); box-shadow: var(--shadow-1); }
+.edSeg button[aria-pressed='true'] svg { color: var(--accent-ink); }
+@media (max-width: 30rem) { .edSeg button span { display: none; } .edSeg button { min-height: 2.75rem; } }
+.edIcons { display: flex; gap: 2px; }
+.edIcons button { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; color: var(--ink); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); transition: border-color var(--dur-fast), color var(--dur-fast); }
+.edIcons button:hover:not(:disabled) { color: var(--ink-strong); border-color: var(--accent); }
+.edSize { display: flex; align-items: center; gap: 0.6rem; font-size: var(--text-xs); color: var(--muted); }
+.edSize input, .edAdv input[type='range'] { flex: 1; min-width: 0; max-width: 18rem; }
+.edSize output, .edAdv output { min-width: 2.2rem; text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink); }
+.ed input[type='range'] { -webkit-appearance: none; appearance: none; height: 1.5rem; background: transparent; touch-action: pan-y; }
+.ed input[type='range']::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-pill); background: var(--border-strong); }
+.ed input[type='range']::-moz-range-track { height: 4px; border-radius: var(--radius-pill); background: var(--border-strong); }
+.ed input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; width: 1.25rem; height: 1.25rem; margin-top: calc(-0.625rem + 2px); border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); box-shadow: var(--shadow-1); }
+.ed input[type='range']::-moz-range-thumb { width: 1.1rem; height: 1.1rem; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); }
+.ed input[type='range']:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-xs); }
+.edStage { display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-2xs); }
+.edCanvas { position: relative; width: 100%; max-width: 100%; margin: 0 auto; touch-action: none; user-select: none; border-radius: var(--radius-xs); overflow: hidden; }
+.edLayer { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.edMask { opacity: 0.5; pointer-events: none; }
+.edLoading { position: absolute; inset: 0; display: grid; place-items: center; font-size: var(--text-sm); color: var(--muted); }
+.edChip { position: absolute; left: 0.5rem; bottom: 0.5rem; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.55rem; font-size: var(--text-xs); color: var(--ink); background: color-mix(in oklch, var(--surface) 88%, transparent); border: 1px solid var(--border); border-radius: var(--radius-pill); pointer-events: none; }
+.edChip svg, .edGo svg { animation: edspin 0.9s linear infinite; }
+@keyframes edspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .edChip svg, .edGo svg { animation: none; } }
+.edSeg3 { max-width: 24rem; }
+.edPrompt { resize: vertical; min-height: 3.5rem; padding: 0.55rem 0.7rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--ink-strong); font: inherit; font-size: var(--text-base); }
+.edPrompt::placeholder { color: var(--muted); }
+.edAdv { font-size: var(--text-sm); }
+.edAdv summary { cursor: pointer; color: var(--muted); width: fit-content; }
+.edAdv label { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.2rem; color: var(--ink); }
+.edAdv label span { min-width: 4.5rem; }
+.edActions { display: flex; gap: var(--space-2xs); position: sticky; bottom: 0; padding: var(--space-2xs) 0; background: linear-gradient(to top, var(--bg) 70%, transparent); }
+.edGo { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; min-height: 2.75rem; max-width: 20rem; padding: 0.45rem 1rem; font-size: var(--text-base); font-weight: 600; color: var(--on-accent); background: var(--accent); border: 0; border-radius: var(--radius-sm); transition: background var(--dur-fast); }
+.edGo:hover:not(:disabled) { background: var(--accent-strong); }
+.edClose { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; color: var(--ink); background: transparent; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.edClose:hover:not(:disabled) { border-color: var(--accent); }
+.imageRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs); }
+.imagePick { position: relative; display: inline-flex; align-items: center; gap: 0.4rem; min-height: 2.5rem; padding: 0.4rem 0.8rem; font-size: var(--text-sm); font-weight: 550; color: var(--ink); background: transparent; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); cursor: pointer; overflow: hidden; }
+.imagePick:hover, .imagePick:focus-within { border-color: var(--accent); color: var(--ink-strong); }
+.imagePick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; font-size: 0; }
+.imageEdit { margin-top: var(--space-2xs); display: inline-flex; align-items: center; gap: 0.3rem; margin-right: var(--space-sm); min-height: 2.25rem; padding: 0.25rem 0.7rem; font-size: var(--text-sm); font-weight: 550; color: var(--ink); background: transparent; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); cursor: pointer; }
+.imageEdit:hover { border-color: var(--accent); color: var(--ink-strong); }
 @media (max-width: 600px) { .inpaintSize input { width: 5.5rem; } }

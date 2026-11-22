@@ -43,6 +43,3 @@ Thumbs.db
 *.bak
 *.bak-*
 
-# self-hosted runtime + models for in-browser auto-select (generated / downloaded at build)
-/public/vendor/
-/public/models/
