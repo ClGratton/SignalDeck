@@ -53,7 +53,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
-COPY --from=sam /sam ./public/models
 
 # `playwright-core` reads runtime assets (including browsers.json) with ordinary
 # Node resolution. Next's standalone file tracer only copies the JS files it can

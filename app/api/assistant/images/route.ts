@@ -173,7 +173,10 @@ async function startInpaint(prompt: string, file: FormDataEntryValue | null, mas
   upload.set('image', file, `inpaint-${crypto.randomUUID()}.${ext}`);
   upload.set('mask', mask, `mask-${crypto.randomUUID()}.png`);
   const up = await comfy('/upload/inpaint', { method: 'POST', body: upload });
-  if (up.status === 400) return json('The image or mask was rejected (size 64-3072 px, at least one selected pixel, mask must match the image).', 400);
+  if (up.status === 400) {
+    const reason = (await up.text().catch(() => '')).replace(/^invalid image or mask:?\s*/, '').slice(0, 200).replace(/[^ -~]/g, '');
+    return json(`The image or mask was rejected${reason ? `: ${reason}` : ''} (need 64-3072 px, at least one selected pixel, mask matching the image).`, 400);
+  }
   if (!up.ok) return providerError(up.status);
   const handles = await up.json();
   if (typeof handles.image !== 'string' || typeof handles.mask !== 'string') throw new Error('bad upload response');
