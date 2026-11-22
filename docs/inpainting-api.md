@@ -64,3 +64,54 @@ The change fades monotonically to exactly zero by 20-30 px outside the mask (no 
 - UI (brush/eraser, SAM click-select) and the app route changes: this contract only.
 - Optional tiers from the research doc: color-match toggle, LanPaint, Q4_K_M. Not installed.
 - Cleanup of `ComfyUI/input/<job>*.png` and relay `uploads/` is not automated (pre-existing behaviour for img2img too); with full-size inpaint uploads this grows faster. Add a retention sweep before heavy use.
+
+## 6. AI edit planner (`POST /plan`) and real recolor (added 2026-11-22)
+
+Owner requirement: instructions such as "make the car white" are understood by a LOCAL, UNCENSORED LLM (no cloud API).
+
+### Planner model and unit
+
+- Model: `mradermacher/Huihui-Qwen3-VL-4B-Instruct-abliterated-GGUF` (abliterated Qwen3-VL-4B-Instruct), HF revision `abf99adf548eb2aa6f9a3d56f976968996959e7f`.
+  - `Huihui-Qwen3-VL-4B-Instruct-abliterated.Q4_K_M.gguf` (2,497,282,496 B), sha256 `20d58872549c13f5476622d2385027e1b346298558822eca8aa33cb8846d5765`
+  - `Huihui-Qwen3-VL-4B-Instruct-abliterated.mmproj-f16.gguf` (836,180,576 B), sha256 `3aedbce332390ff9c4bac496d76490d8c27e4c86b57bed9039d584853a7bfa78`
+  - Stored on proxmox02 in `/mnt/truenas/data/grtlabs-ai/planner/` as `model.gguf` / `mmproj.gguf` (+ `SHA256SUMS`, verified).
+- Served by the existing llama.cpp build `/opt/grtlabs-assist/runtime/llama-b12551` (mtmd works with Qwen3-VL) as `grtlabs-edit-planner.service` on `127.0.0.1:18192`: `-ngl 99 -ot token_embd.*=CUDA0 -fa on -c 4096 --image-min-tokens 1024 --image-max-tokens 1280`, `DynamicUser`, `MemoryHigh=1300M`, `MemoryMax=1700M`, `MemorySwapMax=0`, `RuntimeMaxSec=300`, `Restart=no`. Never enabled; no always-on LLM.
+- On demand and exclusive with image jobs: the relay takes `flock` on `/run/lock/grtlabs-p100-voice.lock` (the same lock `job-control.sh` holds for the whole image job), starts the unit, waits for `/health`, asks once, and always stops the unit again (also on error); `RuntimeMaxSec=300` is the dead-man stop. If an image job holds the lock for more than 30 s, or MemAvailable < 1700 MB, `/plan` answers with the deterministic fallback (`source:"fallback"`, `reason`). An image job submitted while a plan runs simply waits on the same lock (its limit is 600 s). Plans are serialised inside the relay.
+- Measured (car photo 2016x1134 downscaled to 1024, mmap, `-ngl 99`): GPU 4.1-4.4 GiB peak; unit cgroup peak 1.30 GiB (includes reclaimable mmap page cache; it hit MemoryHigh and was reclaimed, no OOM); host MemAvailable minimum 2.19 GB from 3.0 GB at start (net about 0.8 GB); cold load about 70 s from NFS; inference about 9 s (about 980 prompt tokens at 125-135 tok/s, about 100-130 generated tokens at 60 tok/s). Wall time per plan about 75-80 s (load dominates), longer when queued behind another plan or an image job. Because Cloudflare cuts any request at 100 s (524), planning is ASYNC end to end (below); no single HTTP request lasts more than a few seconds. `--no-mmap` was not measured (mmap fits).
+
+### `POST /plan` (async) and `GET /plan/{id}`
+
+Same auth as every relay route (192.168.1.108 + bearer). `POST /plan` is `multipart/form-data`, fields in any order, each at most once: `image` (PNG/JPEG/WEBP, 12 MB, any size up to 9.5 MP; it is downscaled to 1024 px for the model), `instruction` (2-1000 chars), optional `mask` (PNG, same dimensions as `image`; when present the target is the masked region). Input is validated synchronously (`400 invalid plan request: <reason>`); then it answers `202 {"plan_id":"<32 hex>"}` immediately and runs the planner in a background task (same `plan_lock`, same GPU flock and fallback behaviour as before; plans queue behind each other).
+
+`GET /plan/{id}` returns `{"state":"pending|running|done|error","plan":{...},"reason":"..."}` (`plan` only when done, `reason` only on error; 404 for unknown/expired id). State is kept in `/var/lib/grtlabs-image/plans/<id>.json` (atomic writes) and swept after 1 h (TTL); a task that was lost to a relay restart reports `error` ("planner stopped (relay restarted)"). A client disconnect never cancels a plan.
+
+App: `POST /api/assistant/images/plan` (session-gated) starts a plan and returns `202 {plan_id}`; `GET /api/assistant/images/plan?id=` (session-gated, `hasValidSession()` first) returns the sanitized `{state, plan?, reason?}`. `lib/plan-client.ts` polls every 2 s for up to 4 min, treats network/5xx errors as transient, and keeps the id in localStorage (`signaldeck.plan.v1`, 10 min) so a reload and re-press of the same instruction resumes instead of replanning.
+
+The plan (a `done` plan is always usable, never a refusal; the stored shape is):
+
+```json
+{"op":"recolor","target":"car","color":"white","image_prompt":"a white car, glossy white paint, same lighting and reflections",
+ "negative_prompt":"wrong colour, blur, deformed, artifacts","strength":0.45,"grow":8,"context":1.5,
+ "box":[248,356,1523,988],"confidence":0.95,"source":"llm","prefill":true,"ms":79222}
+```
+
+- `op` is `recolor|replace|remove|add|style`. `color` is a colour name or `#rrggbb` (recolor only, else null). `box` is `[x0,y0,x1,y1]` in pixels of the uploaded image: the mask bounding box when a mask was sent, else the model's grounding (no-mask test: box within about 5% of the true mask bbox), or null.
+- Server-side clamp: strength 0.3-1.0 (recolor 0.35-0.6), grow 0-32, context 1.0-3.0, confidence 0-1, text lengths bounded, JSON enforced by llama.cpp `json_schema` (strict). Output is validated; anything invalid makes the whole plan a fallback.
+- `source:"fallback"` (with `reason`): keyword parse (English/Italian colour words and verbs) with defaults recolor 0.5 (+prefill), replace 0.85, remove 1.0, add 0.9, style 0.6; `confidence` 0.3; `box` only from the mask.
+- The route then sends `strength`, `grow`, `context` and `image_prompt` (as `{{PROMPT}}`) to the inpaint template exactly as in sections 1-2 (`BLEND` stays 28). `negative_prompt` is informational (the template has no negative input).
+
+### Recolor pre-fill (`recolor` field on `/upload/inpaint`)
+
+Diffusion alone at 0.45-0.65 does not turn a dark car white, so a recolor is a two-step edit:
+
+1. `POST /upload/inpaint` gets an optional THIRD multipart part `recolor` (after `image` and `mask`): a colour name (English or Italian, see `recolor.py`) or `#rrggbb`. The relay shifts the colour of the masked pixels in CIELAB before storing the source: shading (L*) is kept, a*/b* are set to the target (neutral targets: white/black/grey/silver remap the lightness range with a gamma that preserves highlights and drop the chroma), highlights and deep shadows are desaturated, the edge is feathered inside the mask only. Pixels outside the mask are untouched (enforced with a hard copy). Unknown colour: `400 ... unknown colour`. The response gains `"recolor": true`.
+2. The job then diffuses the pre-filled source at `strength` 0.35-0.6 so the model restores reflections, glass and texture. Because the uploaded file is the pre-filled image, everything downstream (the job, the stitch, "pixels outside grow+blend are bit-identical") is unchanged, and the reference for "outside" is the ORIGINAL image.
+3. UI flow: `/plan` -> if `prefill` is true upload with `recolor=<plan.color>` -> submit the template with the plan values.
+
+Implementation files on proxmox02 (`/mnt/truenas/data/grtlabs-ai/image/`): `plan.py` (planner client, validation, fallback, lock), `recolor.py` (LAB pre-fill), `relay.py` (routes). Prefill cost: about 1-2 s on a 2.3 MP image (bbox crop only, within the relay's 512 MB limit).
+
+### 6.1 Status and remaining steps (written at the tool-call budget limit)
+
+- Verified: model download + sha256, unit load, `/plan` through `plan.py` (mask and no-mask, `source:"llm"`), LAB pre-fill on the car image (mean L*/a*/b* inside the 20.3% mask: original 45.0/7.1/8.6 -> white 79.2/0.6/2.0, red 44.8/52.9/40.9, black 8.8/1.0/1.2).
+- NOT yet verified: full jobs through the relay with measured dE in/outside the mask. The harness was started detached inside the app container (`node /tmp/t/run.mjs`, log `/tmp/t/log.txt`, outputs `/tmp/t/out/<id>.plan.json` and `<id>.result.png`, ids car, b, c, d; about 6 min each). Inputs and originals: `/var/tmp/et/in/` on proxmox02. To finish: copy `/tmp/t/out` back (`docker exec <app> tar c -C /tmp/t out | tar x -C /var/tmp/et`), then compute CIEDE2000/dE76 and mean LAB inside the mask before/after, and max abs diff outside mask grown by 8+28 px (expect 0), with `recolor.rgb2lab`. Acceptance for car: mean L* well above 45 and |a*|,|b*| small inside the mask.
+- `grtlabs-edit-planner` is stopped between plans; the relay was restarted with the new routes (backups `relay.py.bak-20261122-193220`).
