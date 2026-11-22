@@ -20,6 +20,7 @@ import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeFileAtomic } from '@/lib/atomic-write';
+import { fixturesOn, fixtureChats } from '@/lib/dev-fixtures';
 
 export interface StoredChatRecord {
   id: string;
@@ -109,6 +110,7 @@ function coerce(raw: unknown): ChatCollection {
 }
 
 export function readChats(): ChatCollection {
+  if (fixturesOn()) return coerce(fixtureChats());
   const mtime = fileMtimeMs();
   if (cached && mtime === cachedMtime) return cached;
   try {

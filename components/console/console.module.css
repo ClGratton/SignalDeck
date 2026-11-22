@@ -19,6 +19,16 @@
   justify-content: space-between;
   gap: var(--space-xs);
   min-height: 44px;
+  /* App bar: stays put while the panels scroll, so the fixed brand pill and the
+     theme/menu controls never float over panel content. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: calc(var(--pad-y) * -1) calc(var(--pad-x) * -1) 0;
+  padding: var(--pad-y) var(--pad-x) var(--space-2xs);
+  background: color-mix(in oklch, var(--bg) 90%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
 }
 
 /* Offset past the floating BrandNav pill at the top-left corner. */
@@ -173,6 +183,20 @@
 }
 .dashStack .dashTile {
   position: static;
+}
+/* In the stacked (phone) layout a tile is only min-height tall, so the flex:1
+   0 scrollers collapsed to ONE visible row. Let them take their natural height
+   up to a cap instead, then scroll inside. */
+.dashStack .dashTile > .panel {
+  height: auto;
+}
+.dashStack .tableScroll,
+.dashStack .listScroll {
+  flex: none;
+  max-height: min(22rem, 50dvh);
+  /* Scroll chaining ON: a swipe that starts on a list must continue into the
+     page at the list's end, or the list becomes a scroll trap on touch. */
+  overscroll-behavior: auto;
 }
 
 /* ── Edit mode ──────────────────────────────────────────────────────────────── */
@@ -639,6 +663,7 @@
   color: var(--muted);
 }
 .guestName {
+  overflow-wrap: anywhere;
   font-weight: 550;
   color: var(--ink-strong);
   margin-right: 0.5rem;
@@ -771,6 +796,8 @@
   border-bottom: none;
 }
 .entityName {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1116,5 +1143,33 @@
   }
   .conn[data-state='stale'] {
     display: inline-flex;
+  }
+}
+
+/* Phones: five table columns cannot fit 310px of panel; keep guest/state/cpu,
+   drop memory + uptime (still in the panel on wider screens). */
+@media (max-width: 560px) {
+  .guests th:nth-child(4),
+  .guests td:nth-child(4),
+  .guests th:nth-child(5),
+  .guests td:nth-child(5) {
+    display: none;
+  }
+  .guestName,
+  .guestId {
+    display: block;
+    margin-right: 0;
+  }
+}
+.historyLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+/* Phones: leave room under the last panel for the floating assistant button. */
+@media (max-width: 640px) {
+  .wrap {
+    padding-bottom: calc(var(--pad-y) + 4.5rem + env(safe-area-inset-bottom, 0px));
   }
 }

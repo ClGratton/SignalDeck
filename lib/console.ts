@@ -14,6 +14,7 @@ import 'server-only';
 import { labFetch, envBool, trimSlash, type LabMethod } from '@/lib/homelab';
 import { openLabSocket, type LabSocket } from '@/lib/ws-rpc';
 import { cfg, cfgAgent } from '@/lib/service-config';
+import { fixturesOn, fixtureSnapshot } from '@/lib/dev-fixtures';
 
 const CACHE_TTL_MS = 10_000;
 // TrueNAS answers four RPC queries per cycle; a busy middleware occasionally
@@ -539,6 +540,7 @@ async function build(): Promise<ConsoleSnapshot> {
  *  assistant's tools. `fresh` bypasses the cache (still coalesced) so the
  *  assistant can re-read live state when the operator disputes the data. */
 export async function getConsoleSnapshot(opts?: { fresh?: boolean }): Promise<ConsoleSnapshot> {
+  if (fixturesOn()) return fixtureSnapshot();
   const maxAge = opts?.fresh ? 1_500 : CACHE_TTL_MS;
   if (cache && Date.now() - cache.at < maxAge) return cache.value;
   if (!inflight) {
@@ -558,6 +560,7 @@ export async function getConsoleSnapshot(opts?: { fresh?: boolean }): Promise<Co
 /** Never-blocking variant for the dashboard page render. Null on a cold start —
  *  the client poller fills it in within a second. */
 export function peekConsoleSnapshot(): ConsoleSnapshot | null {
+  if (fixturesOn()) return fixtureSnapshot();
   if (!cache || Date.now() - cache.at >= CACHE_TTL_MS) void getConsoleSnapshot();
   return cache?.value ?? null;
 }

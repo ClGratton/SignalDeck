@@ -266,3 +266,25 @@ Left: ST5 (desktop card layout, optional), ST4 bottom sheet on mobile (popover e
 
 Batch 3 done: N1 (P0, dashboard bar at 375: one 44px row, scrollWidth 375 = clientWidth; brand pill, Console title, theme toggle, overflow menu; Edit/Settings/Sign out/Sign out everywhere in the menu), N2 (desktop: theme, edit, settings, account menu; "Sign out everywhere" behind a confirm Dialog), N4 (h1 "Console" + live/offline state), D1 (tile header: icon, state dot + word, meta; stale marker), D2 (Skeleton primitive), D3 (empty-grid StateBlock, aria-live edit announcement; Add widget bar already present), D4 (Unreachable: message, last-update age, Retry), D5 (fmtNum one decimal), D6 (role=meter, 80/90% thresholds), D8 (values in --ink), SE1/AC1 (shared `components/ui/Dialog`: Escape on top dialog only, Tab trap, focus return incl. `returnFocus`, scroll lock, enter/exit motion, dvh, portal; adopted by SettingsPanel (sheet), RevealProvider, sign-out-everywhere, discard-changes, revoke-token, sign-out-others via `ConfirmDialog`), SE2 (full-screen sheet and scrollable tab row under 640px), SE3 (Unsaved indicator, Save disabled until dirty, discard confirm, Saved toast), SE4 (explanation, 30s countdown + auto-hide + Copy), SE5 (44px switch hit area), SE6 (section heading, confirm for destructive revokes), AC6 (aria-describedby/invalid on setting errors), AC7 (disabled Save no longer white-on-pale), ES1 (StateBlock for panel empties and settings load error + Retry), ES2 (reserved error line in the reveal dialog), ES4 (Button loading on Save), ES5 (offline banner after 2 failed polls, Retry now), ES6 (empty-grid hint), MI2 (dialog enter/exit), MI3 (sliding nav indicator), MI4 (toasts for save, copy, revoke), MI5 (value flash on change), M4 (100dvh, safe-area).
 Left: D7 (history cells are not interactive, no change), ES3 (raw-error mapping is image-pane scope), live check of the Reveal dialog (needs a stored secret; same Dialog primitive verified via the confirm dialogs), theme toggle is 26px high (ThemeToggle belongs to Batch 2 files), BrandNav is still fixed (barLeft padding clears it; true in-flow brand deferred).
+
+---
+
+## Local populated audit (2026-11-22)
+
+Method: production build (`npm run build` + `next start -p 3187`), logged in with a generated local test password (2FA off, gitignored `.env.local`, removed afterwards), populated by a dev-only fixture mode. Measured with the built-in browser at 375x812 and 1280x800, light and dark: scrollWidth, getBoundingClientRect of fixed/sticky elements at several scroll offsets, inner scroller sizes, touch targets.
+
+Fixture mode: `lib/dev-fixtures.ts` (29 guests with long names, degraded pool, 14 datasets, 3 Jellyfin sessions, 16 HA entities, long assistant chat with markdown/code/table/error). It is active only when BOTH `SIGNALDECK_FIXTURES=1` AND `AUTH_SECRET` starts with `local-fixture-`; a real deploy secret never does, so a stray flag does nothing. Hooked in `getConsoleSnapshot`, `peekConsoleSnapshot`, `readChats` only.
+
+Found by running it (all missed by the code-only audit):
+- P0 Phone: the Compute guest table showed ONE row (91px of 1383px) and Storage datasets ONE row (22px): the `flex:1 1 0` scrollers collapse to 0 height in the stacked layout, whose tiles are only min-height tall. FIXED (natural height up to min(22rem,50dvh)).
+- P0 Phone: the dashboard header scrolled away while the fixed Grtlabs pill stayed, overlapping panel content. FIXED: the app bar is now sticky with a blurred background (verified bar top = 0 at scroll 0/500/1200/1689; pill and assistant button fixed).
+- P0 Phone: guest table was 476px wide inside a 301px scroller, cpu/mem/up clipped; automation values clipped ("21.4 °("). FIXED: name wraps, mem/up columns hidden under 560px, entity name min-width:0 (values fully visible).
+- P1 Desktop: default layout gave Compute/Storage one 216px row: 2 of 29 guests and one dataset visible. FIXED: default layout is now Compute 2x2, Storage 1x2 (~7 guests, datasets legible). Saved layouts are untouched.
+- P1 Phone: nested lists with `overscroll-behavior: contain` trapped swipes that began on a list (page would not scroll). FIXED: chaining on in the stacked layout.
+- P2 Phone: floating assistant button covered the last row; FIXED: bottom padding. "full status page" link was 15px high; FIXED (44px).
+
+Remaining (not fixed):
+- AssistantSidebar (Batch 4, left alone): header icon buttons 28x28, model/approval chips 28px high, composer buttons 37px; phone drawer leaves a 30px strip and does not lock page scroll behind it; tables/code in chat scroll sideways inside the bubble (acceptable) but have no visible affordance.
+- Brand pill is 34px high (hit area under 44) and still fixed rather than in-flow.
+- Image pane not exercised with a result (needs the relay); not covered by fixtures.
+- Desktop dataset/disk list inside Storage still scrolls inside a fixed-height tile when more than ~6 rows.

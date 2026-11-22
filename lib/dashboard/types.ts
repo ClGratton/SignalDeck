@@ -29,19 +29,19 @@ export interface DashboardLayout {
 export const GRID_LIMITS = { minCols: 1, maxCols: 8, minRows: 1, maxRows: 16 } as const;
 
 // The DEFAULT layout reproduces the original fixed dashboard exactly (3 cols):
-//   compute(2×1) storage(1×1)
+//   compute(2×2) storage(1×2)   (tall: 29 guests / datasets need rows, not one)
 //   media(1×1)  automation(1×1)  traffic(1×1)
 //   history(3×1)
 export const DEFAULT_LAYOUT: DashboardLayout = {
   cols: 3,
-  rows: 3,
+  rows: 4,
   tiles: [
-    { id: 't-compute', widget: 'compute', x: 0, y: 0, w: 2, h: 1 },
-    { id: 't-storage', widget: 'storage', x: 2, y: 0, w: 1, h: 1 },
-    { id: 't-media', widget: 'media', x: 0, y: 1, w: 1, h: 1 },
-    { id: 't-automation', widget: 'automation', x: 1, y: 1, w: 1, h: 1 },
-    { id: 't-traffic', widget: 'traffic', x: 2, y: 1, w: 1, h: 1 },
-    { id: 't-history', widget: 'history', x: 0, y: 2, w: 3, h: 1 },
+    { id: 't-compute', widget: 'compute', x: 0, y: 0, w: 2, h: 2 },
+    { id: 't-storage', widget: 'storage', x: 2, y: 0, w: 1, h: 2 },
+    { id: 't-media', widget: 'media', x: 0, y: 2, w: 1, h: 1 },
+    { id: 't-automation', widget: 'automation', x: 1, y: 2, w: 1, h: 1 },
+    { id: 't-traffic', widget: 'traffic', x: 2, y: 2, w: 1, h: 1 },
+    { id: 't-history', widget: 'history', x: 0, y: 3, w: 3, h: 1 },
   ],
 };
 
