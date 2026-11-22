@@ -27,6 +27,7 @@ import {
   type Edge,
 } from '@/lib/dashboard/reflow';
 import type { DashboardLayout, Tile } from '@/lib/dashboard/types';
+import { StateBlock } from '@/components/ui/StateBlock';
 import styles from './console.module.css';
 
 const EDGES: Edge[] = ['l', 'r', 't', 'b'];
@@ -344,6 +345,13 @@ export function DashboardGrid({
     </div>
   );
 
+  if (!editing && shown.tiles.length === 0) {
+    return (
+      <StateBlock className={styles.emptyTiles} title="No tiles on the dashboard">
+        Choose Edit dashboard, then Add widget, to put Compute, Storage, Media and the rest back.
+      </StateBlock>
+    );
+  }
   if (!editing) return grid;
 
   return (
@@ -374,6 +382,11 @@ export function DashboardGrid({
           </div>
         ) : null}
       </div>
+      {shown.tiles.length === 0 ? (
+        <StateBlock className={styles.emptyTiles} title="No tiles yet">
+          Add a widget to start building this dashboard.
+        </StateBlock>
+      ) : null}
       <div className={styles.editRow}>
         <div className={styles.rowRail} role="group" aria-label="Rows">
           <button type="button" onClick={() => stepRows(1)} aria-label="Add row" disabled={layout.rows >= 16}>

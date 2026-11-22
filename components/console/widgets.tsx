@@ -8,9 +8,8 @@
 // shared DashboardData context (or self-fetches, like Traffic/History).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { createContext, useContext, type ComponentType } from 'react';
+import type { ComponentType } from 'react';
 import { Cpu, HardDrive, Play, Home, Activity, CalendarDays, type LucideIcon } from 'lucide-react';
-import type { ConsoleSnapshot } from '@/lib/console';
 import {
   ComputePanel,
   StoragePanel,
@@ -20,23 +19,8 @@ import {
   HistoryStrip,
 } from './panels';
 
-// Shared data for the data-driven widgets (the snapshot + first-load flag). Kept
-// out of each widget's props so the registry stays a flat list of components.
-interface DashboardData {
-  snapshot: ConsoleSnapshot | null;
-  loading: boolean;
-}
-const DataCtx = createContext<DashboardData>({ snapshot: null, loading: true });
-export function DashboardDataProvider({
-  value,
-  children,
-}: {
-  value: DashboardData;
-  children: React.ReactNode;
-}) {
-  return <DataCtx.Provider value={value}>{children}</DataCtx.Provider>;
-}
-export const useDashboardData = () => useContext(DataCtx);
+export { DashboardDataProvider, useDashboardData } from './bits';
+import { useDashboardData } from './bits';
 
 export interface WidgetDef {
   /** Stable widget id, referenced by Tile.widget. NEVER reuse for a new widget. */

@@ -4,7 +4,7 @@
 .wrap {
   position: relative;
   z-index: var(--z-content);
-  min-height: 100svh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   padding: var(--pad-y) var(--pad-x);
@@ -17,8 +17,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
-  flex-wrap: wrap;
+  gap: var(--space-xs);
+  min-height: 44px;
 }
 
 /* Offset past the floating BrandNav pill at the top-left corner. */
@@ -27,7 +27,8 @@
   align-items: center;
   gap: 0.55rem;
   padding-left: 8.25rem;
-  min-height: 34px;
+  min-height: 44px;
+  min-width: 0;
 }
 
 .tag {
@@ -50,42 +51,10 @@
   gap: var(--space-2xs);
 }
 
-.signout {
-  padding: 0.4rem 0.8rem;
-  font-size: var(--text-sm);
-  font-weight: 550;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out-quart),
-    background var(--dur-fast) var(--ease-out-quart);
-}
-.signout:hover {
-  background: var(--surface-2);
-  border-color: var(--accent);
-}
 
-.iconAction {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out-quart),
-    background var(--dur-fast) var(--ease-out-quart);
-}
-.iconAction:hover {
-  background: var(--surface-2);
-  border-color: var(--accent);
-}
 
 .assistantOpen {
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -572,7 +541,8 @@
 
 .unreachable {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 0.5rem;
   font-size: var(--text-sm);
   color: var(--ink);
@@ -736,7 +706,7 @@
   white-space: nowrap;
 }
 .datasetUse {
-  color: var(--muted);
+  color: var(--ink);
 }
 
 .temps {
@@ -827,7 +797,7 @@
 }
 .entityState {
   font-size: var(--text-xs);
-  color: var(--muted);
+  color: var(--ink);
   white-space: nowrap;
 }
 .entityState[data-on] {
@@ -865,7 +835,7 @@
   color: var(--ink);
 }
 .laneRate {
-  color: var(--muted);
+  color: var(--ink);
 }
 
 /* ── History strip ──────────────────────────────────────────────────────── */
@@ -937,26 +907,6 @@
   gap: 0.55rem;
   padding: 0.2rem 0;
 }
-.skeletonRow {
-  height: 0.85rem;
-  border-radius: 4px;
-  background: var(--surface-2);
-  animation: console-pulse 1.4s ease-in-out infinite;
-}
-@keyframes console-pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .skeletonRow {
-    animation: none;
-  }
-}
 
 /* ── Mobile assistant FAB + scrim ───────────────────────────────────────── */
 
@@ -994,5 +944,192 @@
     background: var(--scrim);
     border: none;
     cursor: pointer;
+  }
+}
+
+/* ── Batch 3: header, account menu, offline banner, tile chrome ─────────── */
+
+.title {
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink-strong);
+}
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--text-xs);
+  color: var(--ok-ink);
+}
+.conn[data-state='stale'] {
+  color: var(--warn-ink);
+}
+.connDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.desktopActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+.onlyMobile {
+  display: none;
+}
+.menuWrap {
+  position: relative;
+}
+.menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: var(--z-header);
+  min-width: 14rem;
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
+  transform-origin: top right;
+}
+.menu form {
+  display: contents;
+}
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 0.7rem;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  text-align: left;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.menuItem:hover,
+.menuItem:focus-visible {
+  background: var(--surface-2);
+}
+.menuDanger {
+  color: var(--down-ink);
+}
+.menuSep {
+  margin: 0.25rem 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+.menu [data-mobile-only] {
+  display: none;
+}
+.offlineBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  background: color-mix(in oklch, var(--warn) 12%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--warn) 40%, var(--border));
+  border-radius: var(--radius-md);
+}
+.offlineBanner svg {
+  flex: 0 0 auto;
+  color: var(--warn-ink);
+}
+.offlineBanner span {
+  flex: 1;
+  min-width: 0;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.panelTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.panelIcon {
+  color: var(--accent-ink);
+}
+.panelHead {
+  flex-wrap: wrap;
+}
+.panelState {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: var(--text-xs);
+}
+.panelState[data-tone='ok'] {
+  color: var(--ok-ink);
+}
+.panelState[data-tone='warn'] {
+  color: var(--warn-ink);
+}
+.panelState[data-tone='down'] {
+  color: var(--down-ink);
+}
+.panelMeta {
+  margin-left: auto;
+}
+.meterValue[data-flash] {
+  animation: value-flash 600ms var(--ease-out-quart);
+}
+@keyframes value-flash {
+  from {
+    color: var(--accent-ink);
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.emptyTiles {
+  padding: var(--space-lg) var(--space-sm);
+}
+
+@media (max-width: 640px) {
+  .barLeft {
+    padding-left: 7.1rem;
+  }
+  .desktopActions,
+  .onlyDesktop {
+    display: none;
+  }
+  .onlyMobile {
+    display: block;
+  }
+  .menu [data-mobile-only] {
+    display: flex;
+  }
+  .menu hr[data-mobile-only] {
+    display: block;
+  }
+  .conn {
+    display: none; /* the offline banner carries this on phones; live is the default */
+  }
+  .conn[data-state='stale'] {
+    display: inline-flex;
+  }
+}
+@media (max-width: 1100px) {
+  .assistantOpen {
+    display: none; /* phones and tablets use the floating assistant button */
   }
 }

@@ -13,6 +13,8 @@ import type {
 } from '@/lib/console';
 import type { ServiceHistory } from '@/lib/history';
 import { useTraffic } from '@/components/TrafficProvider';
+import { Cpu, HardDrive, Play, Home, Activity, CalendarDays } from 'lucide-react';
+import { StateBlock } from '@/components/ui/StateBlock';
 import { Panel, Meter, StatusDot, formatUptime, SkeletonRows, Unreachable } from './bits';
 import styles from './console.module.css';
 
@@ -26,7 +28,7 @@ export function ComputePanel({ data, loading }: { data: ConsoleProxmox | null; l
     </>
   ) : null;
   return (
-    <Panel title="Compute" area="compute" meta={meta}>
+    <Panel title="Compute" area="compute" meta={meta} Icon={Cpu} tone={loading ? undefined : data ? 'ok' : 'down'}>
       {loading ? (
         <SkeletonRows rows={5} />
       ) : !data ? (
@@ -87,7 +89,7 @@ export function ComputePanel({ data, loading }: { data: ConsoleProxmox | null; l
             </table>
           </div>
           {data.guests.length === 0 ? (
-            <p className={styles.emptyNote}>No VMs or containers reported.</p>
+            <StateBlock title="No guests reported">Proxmox answered but listed no VMs or containers.</StateBlock>
           ) : null}
         </>
       )}
@@ -101,13 +103,19 @@ export function StoragePanel({ data, loading }: { data: ConsoleTrueNas | null; l
   const hottest = data && data.temps.length > 0 ? Math.max(...data.temps.map((t) => t.celsius)) : null;
   const meta = data?.uptimeSeconds != null ? <>up {formatUptime(data.uptimeSeconds)}</> : null;
   return (
-    <Panel title="Storage" area="storage" meta={meta}>
+    <Panel
+      title="Storage"
+      area="storage"
+      meta={meta}
+      Icon={HardDrive}
+      tone={loading ? undefined : !data ? 'down' : data.pools.some((p) => !p.healthy) ? 'warn' : 'ok'}
+    >
       {loading ? (
         <SkeletonRows rows={4} />
       ) : !data ? (
         <Unreachable name="TrueNAS" />
       ) : data.pools.length === 0 && data.datasets.length === 0 ? (
-        <p className={styles.emptyNote}>Reachable, but no pool data came back this cycle.</p>
+        <StateBlock title="No pool data">TrueNAS answered but returned no pools this cycle.</StateBlock>
       ) : (
         <>
           {data.pools.map((p) => (
@@ -148,6 +156,8 @@ export function MediaPanel({ data, loading }: { data: ConsoleJellyfin | null; lo
     <Panel
       title="Media"
       area="media"
+      Icon={Play}
+      tone={loading ? undefined : data?.online ? 'ok' : 'down'}
       meta={data?.online ? `${playing.length} playing` : undefined}
     >
       {loading ? (
@@ -155,7 +165,7 @@ export function MediaPanel({ data, loading }: { data: ConsoleJellyfin | null; lo
       ) : !data || !data.online ? (
         <Unreachable name="Jellyfin" />
       ) : data.sessions.length === 0 ? (
-        <p className={styles.emptyNote}>Nobody is connected.</p>
+        <StateBlock title="Nobody is connected">Active Jellyfin sessions appear here.</StateBlock>
       ) : (
         <ul className={`${styles.sessions} ${styles.listScroll}`}>
           {data.sessions.map((s, i) => (
@@ -200,6 +210,8 @@ export function AutomationPanel({
     <Panel
       title="Automation"
       area="automation"
+      Icon={Home}
+      tone={loading ? undefined : data?.online ? 'ok' : 'down'}
       meta={data?.online ? `${data.totalEntities} entities` : undefined}
     >
       {loading ? (
@@ -207,10 +219,9 @@ export function AutomationPanel({
       ) : !data || !data.online ? (
         <Unreachable name="Home Assistant" />
       ) : data.entities.length === 0 ? (
-        <p className={styles.emptyNote}>
-          Nothing pinned. Set <code className="mono">HOMEASSISTANT_ENTITIES</code> or ask the
-          assistant what exists.
-        </p>
+        <StateBlock title="Nothing pinned">
+          Set HOMEASSISTANT_ENTITIES or ask the assistant what exists.
+        </StateBlock>
       ) : (
         <ul className={`${styles.entities} ${styles.listScroll}`}>
           {data.entities.map((e) => (
@@ -243,10 +254,12 @@ export function TrafficPanel() {
     <Panel
       title="Traffic"
       area="traffic"
+      Icon={Activity}
+      tone={traffic ? 'ok' : undefined}
       meta={traffic ? `${traffic.total} req / ${traffic.windowMinutes}m` : undefined}
     >
       {!traffic ? (
-        <p className={styles.emptyNote}>Cloudflare integration is off.</p>
+        <StateBlock title="Traffic is off">The Cloudflare integration is not configured.</StateBlock>
       ) : (
         <>
           <svg className={styles.spark} viewBox="0 0 100 36" preserveAspectRatio="none" aria-hidden>
@@ -288,6 +301,7 @@ export function HistoryStrip() {
     <Panel
       title="History"
       area="history"
+      Icon={CalendarDays}
       meta={
         <a
           href="/status?from=console"

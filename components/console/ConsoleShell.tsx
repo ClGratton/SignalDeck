@@ -5,10 +5,14 @@
 // server had cached so first paint is instant.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, PanelRightOpen, Settings, LayoutGrid, Check } from 'lucide-react';
+import { Bot, PanelRightOpen, Settings, LayoutGrid, Check, WifiOff } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
+import { ConfirmDialog } from '@/components/ui/Dialog';
+import { AccountMenu } from './AccountMenu';
 import type { ConsoleSnapshot } from '@/lib/console';
 import type { AssistantProvider } from '@/lib/assistant/types';
-import { signOut, signOutEverywhere } from '@/app/dashboard/actions';
+import { signOutEverywhere } from '@/app/dashboard/actions';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { RevealProvider } from './RevealProvider';
 import { SettingsPanel } from './SettingsPanel';
@@ -19,6 +23,13 @@ import { AssistantSidebar } from './AssistantSidebar';
 import styles from './console.module.css';
 
 const POLL_MS = 12_000;
+
+function ago(ts: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ts) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  return `${Math.round(s / 3600)}h ago`;
+}
 const SIDEBAR_KEY = 'grtlabs:assistant-open';
 
 export function ConsoleShell({
@@ -55,7 +66,16 @@ export function ConsoleShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [browserVisible, setBrowserVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirmEverywhere, setConfirmEverywhere] = useState(false);
+  const [lastOk, setLastOk] = useState<number | null>(initial ? Date.now() : null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const fails = useRef(0);
+  const settingsBtn = useRef<HTMLButtonElement>(null);
+  const menuBtn = useRef<HTMLButtonElement>(null);
   const timer = useRef<number | undefined>(undefined);
+  // Return focus to whichever control opened a dialog: the overflow menu on phones, the settings button otherwise.
+  const openerOnPhone = () => window.matchMedia('(max-width: 640px)').matches;
+  const settingsReturn = () => (openerOnPhone() ? menuBtn.current : settingsBtn.current);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(SIDEBAR_KEY);
@@ -85,9 +105,16 @@ export function ConsoleShell({
       const res = await fetch('/api/console', { cache: 'no-store' });
       if (!res.ok) throw new Error(String(res.status));
       setSnapshot((await res.json()) as ConsoleSnapshot);
+      fails.current = 0;
+      setLastOk(Date.now());
       setStale(false);
     } catch {
-      setStale(true); // keep showing the last snapshot, marked stale
+      // Keep showing the last snapshot; only flag offline after two failures in a row (ES5).
+      fails.current += 1;
+      if (fails.current >= 2) {
+        setNowTick(Date.now());
+        setStale(true);
+      }
     }
   }, []);
 
@@ -137,52 +164,44 @@ export function ConsoleShell({
     <div className={styles.wrap} data-sidebar={sidebarOpen || undefined}>
       <header className={styles.bar}>
         {/* The persistent BrandNav pill floats at the top-left corner and IS the
-            brand here (and the way back home) — the bar only adds the context
-            tag after it, offset to clear the pill. */}
+            brand here (and the way back home) — the bar adds the page title and
+            live connection state after it, offset to clear the pill. */}
         <span className={styles.barLeft}>
-          <span className={`${styles.tag} mono`}>console</span>
-          {stale ? <span className={`${styles.stale} mono`}>reconnecting…</span> : null}
+          <h1 className={styles.title}>Console</h1>
+          <span className={`${styles.conn} mono`} data-state={stale ? 'stale' : 'live'} role="status">
+            <span className={styles.connDot} aria-hidden />
+            {stale ? 'offline' : 'live'}
+          </span>
         </span>
         <div className={styles.barRight}>
           <ThemeToggle />
-          <button
-            type="button"
-            className={editing ? styles.editDone : styles.iconAction}
-            onClick={() => setEditing((v) => !v)}
-            aria-label={editing ? 'Done editing dashboard' : 'Edit dashboard'}
-            title={editing ? 'Done' : 'Edit dashboard layout'}
-          >
+          {/* Desktop-only direct actions; on phones they live in the overflow menu. */}
+          <span className={styles.desktopActions}>
             {editing ? (
-              <>
+              <Button variant="primary" onClick={() => setEditing(false)}>
                 <Check size={16} strokeWidth={2.4} aria-hidden /> Done
-              </>
+              </Button>
             ) : (
-              <LayoutGrid size={16} strokeWidth={2.2} aria-hidden />
+              <IconButton variant="secondary" label="Edit dashboard layout" onClick={() => setEditing(true)}>
+                <LayoutGrid size={16} strokeWidth={2.2} aria-hidden />
+              </IconButton>
             )}
-          </button>
-          <button
-            type="button"
-            className={styles.iconAction}
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Backend settings"
-            title="Backend credentials"
-          >
-            <Settings size={16} strokeWidth={2.2} aria-hidden />
-          </button>
-          <form action={signOut}>
-            <button type="submit" className={styles.signout}>
-              Sign out
-            </button>
-          </form>
-          <form action={signOutEverywhere}>
-            <button
-              type="submit"
-              className={styles.signout}
-              title="Invalidate every session on every device"
+            <IconButton
+              ref={settingsBtn}
+              variant="secondary"
+              label="Settings"
+              onClick={() => setSettingsOpen(true)}
             >
-              Sign out everywhere
-            </button>
-          </form>
+              <Settings size={16} strokeWidth={2.2} aria-hidden />
+            </IconButton>
+          </span>
+          <AccountMenu
+            triggerRef={menuBtn}
+            editing={editing}
+            onEdit={() => setEditing((v) => !v)}
+            onSettings={() => setSettingsOpen(true)}
+            onSignOutEverywhere={() => setConfirmEverywhere(true)}
+          />
           {!sidebarOpen ? (
             <button
               type="button"
@@ -197,9 +216,25 @@ export function ConsoleShell({
         </div>
       </header>
 
+      {stale ? (
+        <div className={`${styles.offlineBanner} enter`} role="status">
+          <WifiOff size={16} strokeWidth={2.2} aria-hidden />
+          <span>
+            Lost contact with the dashboard server
+            {lastOk ? ` — showing data from ${ago(lastOk, nowTick)}` : ''}. Retrying automatically.
+          </span>
+          <Button variant="secondary" onClick={() => void poll()}>
+            Retry now
+          </Button>
+        </div>
+      ) : null}
+      <p className={styles.srOnly} aria-live="polite">
+        {editing ? 'Editing dashboard layout. Use Done to finish.' : ''}
+      </p>
+
       <div className={styles.body}>
         <main className={styles.gridArea} aria-label="Homelab dashboard">
-          <DashboardDataProvider value={{ snapshot, loading }}>
+          <DashboardDataProvider value={{ snapshot, loading, stale, lastOk, retry: poll }}>
             <DashboardGrid layout={layout} editing={editing} onChange={saveLayout} />
           </DashboardDataProvider>
         </main>
@@ -238,7 +273,17 @@ export function ConsoleShell({
         />
       ) : null}
 
-      {settingsOpen ? <SettingsPanel onClose={() => setSettingsOpen(false)} /> : null}
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} returnFocus={settingsReturn} />
+      <ConfirmDialog
+        open={confirmEverywhere}
+        title="Sign out everywhere?"
+        message="Every session on every device is invalidated, including this one. You will need your password and code to sign in again."
+        confirmLabel="Sign out everywhere"
+        danger
+        formAction={signOutEverywhere}
+        onCancel={() => setConfirmEverywhere(false)}
+        returnFocus={() => menuBtn.current}
+      />
     </div>
     </RevealProvider>
   );

@@ -7,7 +7,10 @@
 // masked behind an eye toggle, and never persisted.
 
 import { createContext, useCallback, useContext, useRef, useState } from 'react';
-import { Eye, Lock, X } from 'lucide-react';
+import { Eye } from 'lucide-react';
+import { Dialog } from '@/components/ui/Dialog';
+import { Button } from '@/components/ui/Button';
+import { Field } from '@/components/ui/Field';
 import styles from './reveal.module.css';
 
 type RevealFn = (endpoint: string, payload: Record<string, unknown>) => Promise<string | null>;
@@ -109,72 +112,63 @@ export function RevealProvider({
   return (
     <Ctx.Provider value={reveal}>
       {children}
-      {pending ? (
-        <div className={styles.overlay} role="dialog" aria-modal="true" aria-label="Re-authenticate">
-          <button type="button" className={styles.scrim} onClick={cancel} aria-label="Cancel" />
-          <form
-            className={styles.dialog}
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submit();
-            }}
-          >
-            <div className={styles.dialogHead}>
-              <span className={styles.dialogTitle}>
-                <Lock size={15} strokeWidth={2.2} aria-hidden /> Confirm it&apos;s you
-              </span>
-              <button type="button" className={styles.closeBtn} onClick={cancel} aria-label="Cancel">
-                <X size={16} strokeWidth={2.2} aria-hidden />
-              </button>
-            </div>
-            <p className={styles.dialogSub}>
-              Re-enter your password{twoFactor && TWO_FACTOR_HINT ? ' and authenticator code' : ''} to
-              reveal a stored secret.
-            </p>
-            <input
-              type="password"
-              className={styles.field}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Dashboard password"
-              autoComplete="current-password"
-              autoFocus
-              aria-label="Password"
+      <Dialog
+        open={pending != null}
+        onClose={cancel}
+        title="Confirm it's you"
+        description={`Secrets are never shown without a fresh check. Re-enter your password${
+          twoFactor && TWO_FACTOR_HINT ? ' and authenticator code' : ''
+        } to reveal this value. It hides again after 30 seconds.`}
+        dismissible={!busy}
+      >
+        <form
+          className={styles.form}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+        >
+          <Field
+            label="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            data-autofocus
+          />
+          {twoFactor ? (
+            <Field
+              label="Authenticator code"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={6}
+              className="mono"
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              placeholder="6 digits"
+              autoComplete="one-time-code"
             />
-            {twoFactor ? (
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={6}
-                className={`${styles.field} mono`}
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                placeholder="6-digit code"
-                autoComplete="one-time-code"
-                aria-label="Authenticator code"
-              />
-            ) : null}
-            {error ? (
-              <p className={styles.error} role="alert">
-                {error}
-              </p>
-            ) : null}
-            <div className={styles.actions}>
-              <button type="button" className={styles.cancelBtn} onClick={cancel}>
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className={styles.revealBtn}
-                disabled={busy || !password || (twoFactor && code.length !== 6)}
-              >
-                <Eye size={14} strokeWidth={2.2} aria-hidden /> {busy ? 'Verifying…' : 'Reveal'}
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
+          ) : null}
+          {/* Reserved line: an error never pushes the buttons down. */}
+          <p className={styles.error} role="alert">
+            {error}
+          </p>
+          <div className={styles.actions}>
+            <Button variant="ghost" onClick={cancel} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={busy}
+              disabled={!password || (twoFactor && code.length !== 6)}
+            >
+              <Eye size={14} strokeWidth={2.2} aria-hidden /> {busy ? 'Verifying…' : 'Reveal'}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
     </Ctx.Provider>
   );
 }

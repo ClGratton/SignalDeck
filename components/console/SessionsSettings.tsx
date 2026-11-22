@@ -6,6 +6,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Smartphone, Monitor, LogOut, QrCode, RefreshCw } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ui/Dialog';
+import { useToast } from '@/components/ui/Toast';
 import styles from './settings.module.css';
 
 interface SessionView {
@@ -88,6 +90,10 @@ export function SessionsSettings() {
     };
   }, [qr]);
 
+  const toast = useToast();
+  const [confirmOthers, setConfirmOthers] = useState(false);
+  const othersBtn = useRef<HTMLButtonElement>(null);
+
   const revoke = useCallback(
     async (id: string) => {
       await fetch('/api/sessions', {
@@ -95,9 +101,10 @@ export function SessionsSettings() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       }).catch(() => {});
+      toast('Device signed out', 'success');
       void load();
     },
-    [load],
+    [load, toast],
   );
 
   const revokeOthers = useCallback(async () => {
@@ -106,8 +113,9 @@ export function SessionsSettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ others: true }),
     }).catch(() => {});
+    toast('Other devices signed out', 'success');
     void load();
-  }, [load]);
+  }, [load, toast]);
 
   const showQr = useCallback(async () => {
     setQrBusy(true);
@@ -134,11 +142,24 @@ export function SessionsSettings() {
 
   return (
     <div className={styles.assistantExtras}>
+      <ConfirmDialog
+        open={confirmOthers}
+        title="Sign out other devices?"
+        message="Every other signed-in device is signed out immediately. This device stays signed in."
+        confirmLabel="Sign out others"
+        danger
+        onCancel={() => setConfirmOthers(false)}
+        onConfirm={() => {
+          setConfirmOthers(false);
+          void revokeOthers();
+        }}
+        returnFocus={() => othersBtn.current}
+      />
       <section>
         <div className={styles.sessionHead}>
           <h3 className={styles.sessionTitle}>Active devices</h3>
           {others > 0 ? (
-            <button type="button" className={styles.linkDanger} onClick={() => void revokeOthers()}>
+            <button ref={othersBtn} type="button" className={styles.linkDanger} onClick={() => setConfirmOthers(true)}>
               Sign out other devices
             </button>
           ) : null}

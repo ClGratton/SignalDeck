@@ -10,6 +10,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Bot, Check, Copy, Trash2 } from 'lucide-react';
 import { useReveal } from './RevealProvider';
+import { ConfirmDialog } from '@/components/ui/Dialog';
+import { useToast } from '@/components/ui/Toast';
 import styles from './settings.module.css';
 
 interface TokenView {
@@ -131,6 +133,9 @@ export function AgentAccessSettings() {
     }
   }, [reveal, name, load]);
 
+  const toast = useToast();
+  const [revokeTarget, setRevokeTarget] = useState<{ id: string; name: string } | null>(null);
+
   const revoke = useCallback(
     async (id: string) => {
       await fetch('/api/settings/agent-tokens', {
@@ -138,9 +143,10 @@ export function AgentAccessSettings() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       }).catch(() => {});
+      toast('Token revoked', 'success');
       void load();
     },
-    [load],
+    [load, toast],
   );
 
   const copy = useCallback(async () => {
@@ -148,13 +154,27 @@ export function AgentAccessSettings() {
     try {
       await navigator.clipboard.writeText(minted);
       setCopied(true);
+      toast('Token copied', 'success');
     } catch {
       /* clipboard blocked (plain-HTTP LAN origin) — the field is selectable */
     }
-  }, [minted]);
+  }, [minted, toast]);
 
   return (
     <div className={styles.assistantExtras}>
+      <ConfirmDialog
+        open={revokeTarget != null}
+        title="Revoke this token?"
+        message={`The agent using "${revokeTarget?.name ?? ''}" loses access immediately. This cannot be undone; mint a new token to restore it.`}
+        confirmLabel="Revoke token"
+        danger
+        onCancel={() => setRevokeTarget(null)}
+        onConfirm={() => {
+          const id = revokeTarget?.id;
+          setRevokeTarget(null);
+          if (id) void revoke(id);
+        }}
+      />
       <section>
         <h3 className={styles.sessionTitle}>Agent access (Claude Code / Codex)</h3>
         <p className={styles.subnote}>
@@ -228,7 +248,7 @@ export function AgentAccessSettings() {
                 <button
                   type="button"
                   className={styles.iconDanger}
-                  onClick={() => void revoke(t.id)}
+                  onClick={() => setRevokeTarget({ id: t.id, name: t.name })}
                   aria-label={`Revoke ${t.name}`}
                   title="Revoke this token"
                 >

@@ -7,8 +7,14 @@
 // the re-auth reveal (eye). Saving writes a runtime override that beats
 // .env.local on the next probe; clearing a field falls back to env.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, EyeOff, ShieldAlert, X } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Copy, Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { Dialog, ConfirmDialog } from '@/components/ui/Dialog';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
+import { StateBlock } from '@/components/ui/StateBlock';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { useToast } from '@/components/ui/Toast';
 import { useReveal } from './RevealProvider';
 import { AssistantSettings } from './AssistantSettings';
 import { SessionsSettings } from './SessionsSettings';
@@ -38,10 +44,56 @@ interface FieldDto {
 
 const isTruthy = (v: string | undefined): boolean => /^(true|1|yes|on)$/i.test((v ?? '').trim());
 
-type Draft = { value: string; revealed: boolean; dirty: boolean; saving?: boolean; saved?: boolean; error?: string };
+type Draft = { value: string; revealed: boolean; revealedAt?: number; dirty: boolean; saving?: boolean; saved?: boolean; error?: string };
 
-export function SettingsPanel({ onClose }: { onClose: () => void }) {
+const REVEAL_SECONDS = 30;
+
+/** Settings drawer: shared Dialog (Escape, focus trap/return, scroll lock) + unsaved-changes guard. */
+export function SettingsPanel({
+  open,
+  onClose,
+  returnFocus,
+}: {
+  open: boolean;
+  onClose: () => void;
+  returnFocus?: () => HTMLElement | null;
+}) {
+  const dirtyRef = useRef(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const requestClose = () => {
+    if (dirtyRef.current) setConfirmClose(true);
+    else onClose();
+  };
+  const setDirty = useCallback((d: boolean) => {
+    dirtyRef.current = d;
+  }, []);
+  return (
+    <>
+      <Dialog open={open} onClose={requestClose} title="Settings" variant="sheet" returnFocus={returnFocus}>
+        <SettingsBody onDirty={setDirty} />
+      </Dialog>
+      <ConfirmDialog
+        open={confirmClose}
+        title="Discard unsaved changes?"
+        message="Some fields were edited but not saved. Closing now discards them."
+        confirmLabel="Discard"
+        danger
+        onCancel={() => setConfirmClose(false)}
+        onConfirm={() => {
+          setConfirmClose(false);
+          dirtyRef.current = false;
+          onClose();
+        }}
+      />
+    </>
+  );
+}
+
+function SettingsBody({ onDirty }: { onDirty: (dirty: boolean) => void }) {
   const reveal = useReveal();
+  const toast = useToast();
+  const [loadError, setLoadError] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const [fields, setFields] = useState<FieldDto[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [active, setActive] = useState<string | null>(null);
@@ -49,8 +101,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/settings', { cache: 'no-store' });
-      if (res.ok) {
+      if (!res.ok) throw new Error(String(res.status));
+      {
         const fs = ((await res.json()) as { fields: FieldDto[] }).fields;
+        setLoadError(false);
         setFields(fs);
         // Seed non-secret values straight into the editable fields.
         setDrafts((d) => {
@@ -65,16 +119,59 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       }
     } catch {
       setFields([]);
+      setLoadError(true);
     }
   }, []);
   useEffect(() => {
     void load();
   }, [load]);
 
+  // Unsaved-changes signal for the close guard.
+  useEffect(() => {
+    onDirty(Object.values(drafts).some((d) => d.dirty));
+  }, [drafts, onDirty]);
+
+  // Revealed secrets hide themselves after REVEAL_SECONDS (value dropped from state unless edited).
+  const anyRevealed = Object.values(drafts).some((d) => d.revealedAt != null);
+  useEffect(() => {
+    if (!anyRevealed) return;
+    const iv = window.setInterval(() => {
+      const n = Date.now();
+      setNow(n);
+      setDrafts((d) => {
+        let changed = false;
+        const next = { ...d };
+        for (const [k, v] of Object.entries(d)) {
+          if (v.revealedAt != null && n - v.revealedAt >= REVEAL_SECONDS * 1000) {
+            next[k] = { ...v, revealed: false, revealedAt: undefined, value: v.dirty ? v.value : '' };
+            changed = true;
+          }
+        }
+        return changed ? next : d;
+      });
+    }, 1000);
+    return () => window.clearInterval(iv);
+  }, [anyRevealed]);
+
   const groups = useMemo(() => [...new Set((fields ?? []).map((f) => f.group))], [fields]);
   useEffect(() => {
     if (groups.length && (active == null || !groups.includes(active))) setActive(groups[0]);
   }, [groups, active]);
+
+  // Sliding indicator behind the active nav item (MI3).
+  const navRef = useRef<HTMLElement>(null);
+  const [indicator, setIndicator] = useState<React.CSSProperties>({ opacity: 0 });
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const el = nav?.querySelector<HTMLElement>('[data-active]');
+    if (!nav || !el) return;
+    setIndicator({
+      opacity: 1,
+      width: el.offsetWidth,
+      height: el.offsetHeight,
+      transform: `translate(${el.offsetLeft}px, ${el.offsetTop}px)`,
+    });
+  }, [active, fields]);
 
   const setDraft = (name: string, patch: Partial<Draft>) =>
     setDrafts((d) => ({
@@ -85,7 +182,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const onReveal = async (f: FieldDto) => {
     const cur = drafts[f.name];
     if (cur?.revealed) {
-      setDraft(f.name, { revealed: false });
+      setDraft(f.name, { revealed: false, revealedAt: undefined, value: cur.dirty ? cur.value : '' });
       return;
     }
     // Nothing stored to reveal — don't make the operator pass the re-auth gate
@@ -96,7 +193,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       return;
     }
     const value = await reveal('/api/settings/reveal', { name: f.name });
-    if (value != null) setDraft(f.name, { value, revealed: true, dirty: false });
+    if (value != null) {
+      setNow(Date.now());
+      setDraft(f.name, { value, revealed: true, revealedAt: Date.now(), dirty: false });
+    }
   };
 
   // Direct save (no draft/dirty dance) — used by the multiplier dropdown.
@@ -145,6 +245,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       if (res.ok) {
         setFields((fs) => fs?.map((x) => (x.name === f.name ? { ...x, source: body.source ?? x.source } : x)) ?? fs);
         setDraft(f.name, { dirty: false, saving: false, saved: true, error: undefined });
+        toast(`${f.label} saved`, 'success');
         setTimeout(() => setDraft(f.name, { saved: false }), 1800);
       } else {
         // Surface WHY instead of silently leaving the button "unsaved" — a 400
@@ -242,92 +343,134 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             onChange={(e) => setDraft(f.name, { value: e.target.value, dirty: true, error: undefined })}
             autoComplete="off"
             spellCheck={false}
+            aria-invalid={d.error ? true : undefined}
+            aria-describedby={d.error ? `err-${f.name}` : undefined}
           />
           {f.secret ? (
-            <button
-              type="button"
-              className={styles.iconBtn}
+            <IconButton
+              variant="secondary"
+              label={d.revealed ? 'Hide value' : 'Reveal value'}
               onClick={() => void onReveal(f)}
-              aria-label={d.revealed ? 'Hide value' : 'Reveal value'}
               disabled={!f.source && !d.dirty}
-              title={!f.source ? 'Nothing set yet' : d.revealed ? 'Hide' : 'Reveal'}
             >
               {d.revealed ? (
                 <EyeOff size={15} strokeWidth={2.2} aria-hidden />
               ) : (
                 <Eye size={15} strokeWidth={2.2} aria-hidden />
               )}
-            </button>
+            </IconButton>
           ) : null}
-          <button
-            type="button"
-            className={styles.saveBtn}
+          {f.secret && d.revealed && d.value ? (
+            <IconButton
+              variant="secondary"
+              label="Copy value"
+              onClick={() => {
+                navigator.clipboard
+                  .writeText(d.value)
+                  .then(() => toast('Copied', 'success'))
+                  .catch(() => toast('Copy blocked by the browser', 'error'));
+              }}
+            >
+              <Copy size={15} strokeWidth={2.2} aria-hidden />
+            </IconButton>
+          ) : null}
+          <Button
+            variant="primary"
             onClick={() => void onSave(f)}
-            disabled={!d.dirty || d.saving}
+            disabled={!d.dirty}
+            loading={d.saving}
           >
-            {d.saving ? '…' : d.saved ? 'Saved' : 'Save'}
-          </button>
+            {d.saved ? 'Saved' : 'Save'}
+          </Button>
         </div>
-        {d.error ? <p className={styles.fieldError}>{d.error}</p> : null}
+        {d.revealed && d.revealedAt != null && f.secret ? (
+          <p className={`${styles.fieldHint} mono tnum`}>
+            Visible for {Math.max(0, REVEAL_SECONDS - Math.floor((now - d.revealedAt) / 1000))}s, then it hides again.
+          </p>
+        ) : null}
+        {d.dirty ? <p className={styles.fieldHint}>Unsaved change</p> : null}
+        {d.error ? (
+          <p id={`err-${f.name}`} className={styles.fieldError} role="alert">
+            {d.error}
+          </p>
+        ) : null}
       </div>
     );
   };
 
+  if (fields == null) {
+    return (
+      <div className={styles.loading} aria-busy="true">
+        <Skeleton height="1.1rem" width="40%" />
+        <Skeleton height="2.4rem" />
+        <Skeleton height="1.1rem" width="30%" />
+        <Skeleton height="2.4rem" />
+      </div>
+    );
+  }
+  if (loadError) {
+    return (
+      <div className={styles.loading}>
+        <StateBlock
+          kind="error"
+          title="Settings did not load"
+          action={
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setFields(null);
+                setLoadError(false);
+                void load();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          The dashboard could not read its settings. Check that you are still signed in, then retry.
+        </StateBlock>
+      </div>
+    );
+  }
+
   return (
-    <div className={styles.overlay} role="dialog" aria-modal="true" aria-label="Settings">
-      <button type="button" className={styles.scrim} onClick={onClose} aria-label="Close settings" />
-      <div className={styles.panel}>
-        <header className={styles.head}>
-          <h2 className={styles.title}>Settings</h2>
-          <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Close">
-            <X size={18} strokeWidth={2.2} aria-hidden />
+    <div className={styles.body}>
+      <nav className={styles.nav} aria-label="Settings sections" ref={navRef}>
+        <span className={styles.navIndicator} style={indicator} aria-hidden />
+        {groups.map((g) => (
+          <button
+            key={g}
+            type="button"
+            className={styles.navItem}
+            data-active={g === active || undefined}
+            aria-current={g === active ? 'true' : undefined}
+            onClick={() => setActive(g)}
+          >
+            {g}
           </button>
-        </header>
+        ))}
+      </nav>
 
-        {fields == null ? (
-          <p className={styles.muted} style={{ padding: '1.25rem' }}>
-            Loading…
-          </p>
-        ) : (
-          <div className={styles.body}>
-            <nav className={styles.nav} aria-label="Settings sections">
-              {groups.map((g) => (
-                <button
-                  key={g}
-                  type="button"
-                  className={styles.navItem}
-                  data-active={g === active || undefined}
-                  onClick={() => setActive(g)}
-                >
-                  {g}
-                </button>
-              ))}
-            </nav>
-
-            <div className={styles.content}>
-              <p className={styles.intro}>
-                These power the panels and the assistant. They override{' '}
-                <code className="mono">.env.local</code> on the next probe. The eye reveals a current
-                value after you re-confirm your password. Fields flagged{' '}
-                <ShieldAlert size={12} strokeWidth={2.4} aria-hidden /> need an elevated token for the
-                assistant to perform actions (see CREDENTIALS.md).
-              </p>
-              {fields
-                .filter((f) => f.group === active && f.name !== 'ASSISTANT_MULTIPLIER_MODEL')
-                .map(renderField)}
-              {active === 'Assistant' ? (
-                <AssistantSettings
-                  multiplierValue={
-                    fields.find((f) => f.name === 'ASSISTANT_MULTIPLIER_MODEL')?.value ?? ''
-                  }
-                  onSaveMultiplier={(v) => void saveValue('ASSISTANT_MULTIPLIER_MODEL', v)}
-                />
-              ) : null}
-              {active === 'Security & sessions' ? <SessionsSettings /> : null}
-              {active === 'Agent access' ? <AgentAccessSettings /> : null}
-            </div>
-          </div>
-        )}
+      <div className={styles.content}>
+        <p className={styles.intro}>
+          These power the panels and the assistant. They override{' '}
+          <code className="mono">.env.local</code> on the next probe. The eye reveals a current value
+          after you re-confirm your password. Fields flagged{' '}
+          <ShieldAlert size={12} strokeWidth={2.4} aria-hidden /> need an elevated token for the
+          assistant to perform actions (see CREDENTIALS.md).
+        </p>
+        <h3 className={styles.sectionHeading}>{active}</h3>
+        {fields
+          .filter((f) => f.group === active && f.name !== 'ASSISTANT_MULTIPLIER_MODEL')
+          .map(renderField)}
+        {active === 'Assistant' ? (
+          <AssistantSettings
+            multiplierValue={fields.find((f) => f.name === 'ASSISTANT_MULTIPLIER_MODEL')?.value ?? ''}
+            onSaveMultiplier={(v) => void saveValue('ASSISTANT_MULTIPLIER_MODEL', v)}
+          />
+        ) : null}
+        {active === 'Security & sessions' ? <SessionsSettings /> : null}
+        {active === 'Agent access' ? <AgentAccessSettings /> : null}
       </div>
     </div>
   );

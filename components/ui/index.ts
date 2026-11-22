@@ -7,3 +7,4 @@ export { Skeleton } from './Skeleton';
 export { StateBlock } from './StateBlock';
 export { ToastProvider, useToast } from './Toast';
 export { SkipLink } from './SkipLink';
+export { Dialog, ConfirmDialog, type DialogProps } from './Dialog';
