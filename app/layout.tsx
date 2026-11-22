@@ -10,6 +10,8 @@ import { TelemetryCanvas } from '@/components/TelemetryCanvas';
 import { BrandNav } from '@/components/BrandNav';
 import { PageTransition } from '@/components/PageTransition';
 import { FirstLoadReset } from '@/components/FirstLoadReset';
+import { SkipLink } from '@/components/ui/SkipLink';
+import { ToastProvider } from '@/components/ui/Toast';
 import { DebugPanel } from '@/components/DebugPanel';
 import { peekAggregateStatus } from '@/lib/status-source';
 import { peekTrafficSeries } from '@/lib/cloudflare';
@@ -45,7 +47,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         {/* Sets the theme attribute before paint to avoid a flash of the wrong theme. */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <SkipLink />
         <ThemeProvider>
+          <ToastProvider>
           <StatusProvider initial={status}>
             <TrafficProvider initial={traffic}>
               <TelemetryCanvas />
@@ -54,6 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <PageTransition>{children}</PageTransition>
             </TrafficProvider>
           </StatusProvider>
+          </ToastProvider>
         </ThemeProvider>
         <DebugPanel />
       </body>

@@ -12,8 +12,10 @@
   --font-mono: 'Spline Sans Mono Variable', ui-monospace, 'SF Mono', 'Cascadia Mono',
     'Roboto Mono', Menlo, Consolas, monospace;
 
+  --text-2xs: 0.6875rem; /* 11px floor: uppercase mono labels only */
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
+  --text-mono: 0.8125rem;
   --text-base: 1rem;
   --text-md: 1.0625rem;
   --text-lg: 1.25rem;
@@ -29,6 +31,13 @@
   --space-lg: 2.5rem;
   --space-xl: 4rem;
   --space-2xl: 6rem;
+  /* semantic aliases used by the ui primitives */
+  --gap-tight: 0.5rem;
+  --gap: 1rem;
+  --gap-section: 2.5rem;
+  --pad-card: 1rem;
+  --control-h: 2.5rem; /* 40px */
+  --control-h-lg: 2.75rem; /* 44px */
   --pad-x: clamp(1.25rem, 5vw, 4rem);
   --pad-y: clamp(1.1rem, 3.2vh, 2rem);
 
@@ -47,12 +56,17 @@
   --dur: 220ms;
   --dur-slow: 420ms;
   --dur-boot: 820ms;
+  --ease-in: cubic-bezier(0.5, 0, 0.75, 0);
+  --dur-exit: 160ms;
 
   /* ---- Z-index (semantic) ---- */
   --z-canvas: 0;
   --z-content: 2;
   --z-header: 1100;
+  --z-popover: 1300;
+  --z-modal: 1400;
   --z-tooltip: 1500;
+  --z-toast: 1600;
 
   /* ---- Light theme palette (default) ---- */
   --bg: oklch(0.985 0.004 220);
@@ -83,11 +97,13 @@
   --down-ink: oklch(0.52 0.21 27);
 
   --focus: var(--accent);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
   --scrim: oklch(0.985 0.004 220 / 0.72);
   --on-accent: oklch(0.99 0 0);
 
   --shadow-1: 0 1px 2px oklch(0.2 0.02 235 / 0.06), 0 2px 6px oklch(0.2 0.02 235 / 0.06);
   --shadow-2: 0 8px 24px oklch(0.2 0.02 235 / 0.1);
+  --shadow-3: 0 18px 48px oklch(0.2 0.02 235 / 0.18), 0 2px 8px oklch(0.2 0.02 235 / 0.08);
   --grid-line: oklch(0.5 0.02 230 / 0.12);
 
   /* Blur applied to the background telemetry canvas. Tunable live via the debug
@@ -128,6 +144,7 @@
 
   --shadow-1: 0 1px 2px oklch(0 0 0 / 0.3);
   --shadow-2: 0 12px 32px oklch(0 0 0 / 0.4);
+  --shadow-3: 0 24px 64px oklch(0 0 0 / 0.55), 0 2px 8px oklch(0 0 0 / 0.35);
   --grid-line: oklch(0.7 0.02 240 / 0.1);
 }
 
@@ -157,6 +174,13 @@ html.theme-changing *::after {
 html {
   -webkit-text-size-adjust: 100%;
   color-scheme: light dark;
+  accent-color: var(--accent);
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
 body {
   min-height: 100svh;
@@ -185,7 +209,9 @@ svg {
   max-width: 100%;
 }
 button,
-input {
+input,
+textarea,
+select {
   font: inherit;
   color: inherit;
 }
@@ -212,6 +238,35 @@ h3 {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
+}
+
+/* Single disabled treatment: dimmed, inert, not-allowed. Primitives layer their own. */
+:disabled,
+[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+:disabled:not(.keep-opacity) {
+  opacity: 0.5;
+}
+
+/* Skip link (AC2): off-screen until focused. */
+.skip-link {
+  position: fixed;
+  top: var(--space-2xs);
+  left: var(--space-2xs);
+  z-index: var(--z-toast);
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  background: var(--ink-strong);
+  color: var(--bg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transform: translateY(-200%);
+  transition: transform var(--dur-fast) var(--ease-out-quart);
+}
+.skip-link:focus-visible {
+  transform: translateY(0);
+  color: var(--bg);
 }
 
 .mono {
@@ -284,6 +339,28 @@ html.first-load .boot {
   animation: boot-rise var(--dur-boot) var(--ease-out-expo) both;
   animation-delay: calc(var(--i, 0) * 90ms + 120ms);
 }
+
+/* ---- Motion utilities (G6). Enter/exit/pop/sheet; one reduced-motion block below. ---- */
+@keyframes ui-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ui-exit {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(4px); }
+}
+@keyframes ui-pop {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ui-sheet {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+.enter { animation: ui-enter var(--dur) var(--ease-out-quart) both; }
+.exit { animation: ui-exit var(--dur-exit) var(--ease-in) both; }
+.pop { animation: ui-pop var(--dur-fast) var(--ease-out-quart) both; transform-origin: top center; }
+.sheet { animation: ui-sheet var(--dur-slow) var(--ease-out-expo) both; }
 
 @media (prefers-reduced-motion: reduce) {
   *,
