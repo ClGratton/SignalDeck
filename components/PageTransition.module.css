@@ -3,7 +3,9 @@
    instead — and crucially, nothing here can retrigger when html.first-load is
    removed after the intro. */
 .route[data-animate] {
-  animation: route-in var(--dur-slow) var(--ease-out-quart) both;
+  /* backwards, not both: a forwards-filled transform animation keeps a containing
+     block for position:fixed descendants, so fixed UI scrolled with the page. */
+  animation: route-in var(--dur-slow) var(--ease-out-quart) backwards;
 }
 
 @keyframes route-in {

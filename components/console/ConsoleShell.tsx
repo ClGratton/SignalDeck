@@ -5,7 +5,8 @@
 // server had cached so first paint is instant.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, PanelRightOpen, Settings, LayoutGrid, Check, WifiOff } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Bot, Settings, LayoutGrid, Check, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { ConfirmDialog } from '@/components/ui/Dialog';
@@ -64,6 +65,8 @@ export function ConsoleShell({
   // Desktop: sidebar docked in the grid, collapse remembered. Mobile: overlay.
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const [browserVisible, setBrowserVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmEverywhere, setConfirmEverywhere] = useState(false);
@@ -202,17 +205,6 @@ export function ConsoleShell({
             onSettings={() => setSettingsOpen(true)}
             onSignOutEverywhere={() => setConfirmEverywhere(true)}
           />
-          {!sidebarOpen ? (
-            <button
-              type="button"
-              className={styles.assistantOpen}
-              onClick={() => toggleSidebar(true)}
-              aria-label="Show assistant"
-            >
-              <PanelRightOpen size={16} strokeWidth={2.2} aria-hidden />
-              <span>Operator</span>
-            </button>
-          ) : null}
         </div>
       </header>
 
@@ -255,15 +247,28 @@ export function ConsoleShell({
         </div>
       </div>
 
-      {/* Mobile: floating assistant button + scrim for the drawer */}
-      <button
-        type="button"
-        className={styles.fab}
-        onClick={() => setDrawerOpen(true)}
-        aria-label="Open assistant"
-      >
-        <Bot size={20} strokeWidth={2.2} aria-hidden />
-      </button>
+      {/* Floating assistant button. Portaled to <body> so no ancestor (the route
+          fade-in wrapper, a transform, a filter) can become its containing block
+          and make it scroll with the page. Phones: opens the drawer. Desktop:
+          shown only while the docked panel is collapsed. Hidden while open. */}
+      {mounted
+        ? createPortal(
+            <button
+              type="button"
+              className={styles.fab}
+              data-docked={sidebarOpen || undefined}
+              data-drawer={drawerOpen || undefined}
+              onClick={() => {
+                if (window.matchMedia('(max-width: 1100px)').matches) setDrawerOpen(true);
+                else toggleSidebar(true);
+              }}
+              aria-label="Open assistant"
+            >
+              <Bot size={22} strokeWidth={2.2} aria-hidden />
+            </button>,
+            document.body,
+          )
+        : null}
       {drawerOpen ? (
         <button
           type="button"

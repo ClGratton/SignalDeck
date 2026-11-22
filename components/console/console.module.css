@@ -53,25 +53,6 @@
 
 
 
-.assistantOpen {
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.8rem;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: color-mix(in oklch, var(--accent) 10%, var(--surface));
-  border: 1px solid color-mix(in oklch, var(--accent) 40%, var(--border-strong));
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out-quart);
-}
-.assistantOpen:hover {
-  background: color-mix(in oklch, var(--accent) 18%, var(--surface));
-}
-
 /* ── Body: grid + sidebar ───────────────────────────────────────────────── */
 
 .body {
@@ -911,31 +892,36 @@
 /* ── Mobile assistant FAB + scrim ───────────────────────────────────────── */
 
 .fab {
-  display: none;
+  position: fixed;
+  right: calc(var(--space-md, 1rem) + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--space-md, 1rem) + env(safe-area-inset-bottom, 0px));
+  z-index: var(--z-header);
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  color: var(--on-accent);
+  background: var(--accent);
+  border: none;
+  box-shadow: var(--shadow-2);
+  cursor: pointer;
+}
+.fab:active {
+  transform: translateY(1px);
+}
+.fab[data-drawer] {
+  display: none; /* the drawer is open: it has its own close control */
+}
+@media (min-width: 1101px) {
+  .fab[data-docked] {
+    display: none; /* the docked panel is already on screen */
+  }
 }
 .scrim {
   display: none;
 }
 @media (max-width: 1100px) {
-  .fab {
-    position: fixed;
-    right: max(1rem, env(safe-area-inset-right));
-    bottom: max(1rem, env(safe-area-inset-bottom));
-    z-index: var(--z-header);
-    display: grid;
-    place-items: center;
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    color: var(--on-accent);
-    background: var(--accent);
-    border: none;
-    box-shadow: var(--shadow-2);
-    cursor: pointer;
-  }
-  .fab:active {
-    transform: translateY(1px);
-  }
   .scrim {
     display: block;
     position: fixed;
@@ -944,6 +930,10 @@
     background: var(--scrim);
     border: none;
     cursor: pointer;
+  }
+  /* Keep the last tile clear of the floating button. */
+  .wrap {
+    padding-bottom: calc(var(--pad-y) + 52px + 1.5rem + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -1126,10 +1116,5 @@
   }
   .conn[data-state='stale'] {
     display: inline-flex;
-  }
-}
-@media (max-width: 1100px) {
-  .assistantOpen {
-    display: none; /* phones and tablets use the floating assistant button */
   }
 }
