@@ -15,3 +15,6 @@ Remaining:
 - Browser SAM removed (onnxruntime-web, sam-client, vendor-ort, Dockerfile `sam` stage, /models, /vendor/ort headers). Selection is server-side via `app/api/assistant/images/segment/route.ts` -> relay `/segment/embed` + `/segment/predict` (embed on editor open; 404 unknown key -> re-embed once). Needs the relay segment endpoints to be live; if absent the editor shows a note and Brush keeps working.
 - UI redesigned with console tokens (segmented tools, icon buttons, token-styled sliders, sticky primary action).
 - To verify on the real deployment: tap an object with the phone, then Generate (relay segment endpoints must exist).
+
+## Image result stage (2026-11-22)
+Generate (create/img2img/edit) now leaves the form for a full-pane result stage: blurred source or placeholder, status line + timer, reveal (blur-to-sharp) on completion, actions Edit again / Download / Hold to compare / Back to create / New, error with Retry. Resume via localStorage grtlabs.imageJob (prompt, kind, thumb, ar). No cancel: the relay API has no cancel route. Not yet screenshot-verified: error state and a true 375px viewport (the browser pane emulation reported a wrong inner width).
