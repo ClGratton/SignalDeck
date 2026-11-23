@@ -108,3 +108,14 @@ Results:
 - Flux Fill fit/speed: not measured. Risk: worker cap 1.75 GiB (SDXL load alone peaks 1.7), RuntimeMaxSec=900.
 
 Next: view s_sdxl_* jobs (vi.ps1 from Bash, not PowerShell: quoting), rerun car, run `chain_eval.sh fluxfill flux` after downloads end (ALLDONE in dl_flux.log), measure RSS/VRAM/s-per-step, decide default per op (nothing changed yet; default stays krea).
+
+### Inpainting model switch, update 2026-11-23 (second agent, stopped at tool-call budget)
+
+Plain masks, seed 1234, judged by looking (side-by-sides in the session scratchpad: sdxl_beard.jpg, sdxl_car.jpg, flux_glasses.jpg).
+- SDXL beard (job 4b7f0d80, strength 0.9, ctx 2.5, 275 s): PASS. Real beard + mustache with grey chin, no seam, glasses/eyes/nose/lips shape kept. Beard darker than the hair.
+- SDXL car (job 103edd77, strength 1.0, ctx 1.5, mask 22.8%, 261 s): FAIL. It painted a NEW white sedan inside the car-shaped mask. SDXL is not usable for removal with a silhouette mask at strength 1.0.
+- Flux Fill (flux1-fill-dev Q4_K_S + t5 Q4_K_M + clip_l + ae, all sha256 verified, FluxGuidance 30, euler/simple 20 steps, no LoRA) on glasses (job 3cb282ff, strength 0.7): frame AND its shadow gone, no seam; eyes regenerated (darker, wider, heavier brows) = identity drift like SDXL. 462 s total incl. cold NAS load (cap 900 s); worker cgroup peak 1792M = the 1.75 GiB cap but no OOM kill (page cache inclusive); VRAM peak 8.5 GB; GPU 62 C after the job, no throttle flags. s/step not isolated.
+- Flux Fill car/jacket/beard: chain `/root/ctx/auto_flux.sh` was still running (results /root/ctx/s_flux_{car,jacket,beard}.json, monitor /root/ctx/flux_mon2.log), NOT viewed.
+- Kontext: relay.py engine=kontext + template `workflows/lustify-inpaint_kontext-template.json` added (UnetLoaderGGUF Q4_K_S, LoraLoaderModelOnly removal LoRA strength 1 for remove else 0, ReferenceLatent + SetLatentNoiseMask, FluxGuidance 2.5, 22 steps, crop 768, prompt = the user instruction); builder `/root/ctx/mk_kontext_tpl.py`, relay backup `relay.py.bak-*-kontext`, relay restarted, syntax OK, NEVER RENDERED. Download `/root/ctx/dl_kontext.sh` (QuantStack rev 2d083027, sha cc22ff7a...; windsingai LoRA rev bca2b6d4, sha 32385740...) is SIGSTOPped at 1.2/6.8 GB by design (frees bandwidth); auto_flux.sh sends CONT after the Flux download, so it should be running; check dl_kontext.log for ALLDONE.
+- Defaults unchanged: Krea stays default; no op switched. The Flux removal LoRA (xiaozhijason, civarchive) was not fetched.
+- Next: view s_flux_car/jacket/beard; when Kontext ALLDONE run `/root/ctx/chain_eval.sh kontext kon glasses car jacket beard` (strength 1.0; glasses 1.0); then decide per op. Stop /root/ctx/mon2.sh when finished.
