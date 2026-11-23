@@ -119,3 +119,19 @@ Plain masks, seed 1234, judged by looking (side-by-sides in the session scratchp
 - Kontext: relay.py engine=kontext + template `workflows/lustify-inpaint_kontext-template.json` added (UnetLoaderGGUF Q4_K_S, LoraLoaderModelOnly removal LoRA strength 1 for remove else 0, ReferenceLatent + SetLatentNoiseMask, FluxGuidance 2.5, 22 steps, crop 768, prompt = the user instruction); builder `/root/ctx/mk_kontext_tpl.py`, relay backup `relay.py.bak-*-kontext`, relay restarted, syntax OK, NEVER RENDERED. Download `/root/ctx/dl_kontext.sh` (QuantStack rev 2d083027, sha cc22ff7a...; windsingai LoRA rev bca2b6d4, sha 32385740...) is SIGSTOPped at 1.2/6.8 GB by design (frees bandwidth); auto_flux.sh sends CONT after the Flux download, so it should be running; check dl_kontext.log for ALLDONE.
 - Defaults unchanged: Krea stays default; no op switched. The Flux removal LoRA (xiaozhijason, civarchive) was not fetched.
 - Next: view s_flux_car/jacket/beard; when Kontext ALLDONE run `/root/ctx/chain_eval.sh kontext kon glasses car jacket beard` (strength 1.0; glasses 1.0); then decide per op. Stop /root/ctx/mon2.sh when finished.
+
+### Inpainting model switch, update 2026-11-23 (third agent, tool-call budget reached)
+
+Plain masks, seed 1234, judged by looking. Images in the session scratchpad: flux_jacket.jpg, flux_beard.jpg, flux_car.jpg.
+
+| Case | SDXL | Flux Fill (Q4_K_S) | Krea | Kontext |
+|---|---|---|---|---|
+| beard (add) | PASS, real beard, face kept | PASS with caveat: goatee + moustache, grey chin, face kept, lips slightly more open; 535 s | stubble/face drift | not run |
+| jacket->white tee (replace) | good fit, wrong colour (navy) | good shape (natural neck, shoulders, face unchanged) but GREY not white; 540 s | not tested | not run |
+| glasses (remove) | frame gone, eyes changed, frame shadow kept | frame + shadow gone, eyes regenerated (darker, rounder, heavier brows); 462 s | - | not run |
+| car (remove) | FAIL, painted new car | FAIL, painted a new black muscle car, kerb/line not continued; 566 s | invented objects | not run |
+
+- Planner note: the instruction "remove the car, leave the empty parking spot" makes the planner fall back ("Could not tell where that is"); "remove the car" works. Fix the phrase handling before the default switch.
+- GPU temp during Flux jobs 59-78 C, no throttle flags. Worker cap 1.75 GiB held, no OOM.
+- Kontext NOT evaluated: `dl_kontext.log` printed ALLDONE although curl had timed out after the SIGSTOP; flux1-kontext-dev-Q4_K_S.gguf was only 1.2 GB. Download resumed (`/root/ctx/dl_kontext.sh`, curl -C -), 5.4/6.8 GB at 12:03; sha256 (cc22ff7a...) must be verified (`.sha256` file appears only on success) before `chain_eval.sh kontext kon glasses car jacket beard` (RESTART=1 GS=1.0) and the glasses strength 0.45 variant.
+- Defaults: unchanged. Krea for txt2img. For add/replace-with-colour/remove no engine has been shown correct; SDXL and Flux Fill both PASS beard, both repaint objects on silhouette removal. Candidate for remove: Kontext + removal LoRA (untested). Replace colour needs the colour forced (white tee came out grey/navy).
