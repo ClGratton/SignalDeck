@@ -15,7 +15,7 @@ const MAX_MPX = 9_000_000;
 const MIN_SIDE = 64;
 const UNDO_LIMIT = 12;
 const MASK_RGB = [255, 64, 96];
-export interface PlanSummary { op: string; target: string; color: string | null; prompt: string; source: 'llm' | 'fallback' }
+export interface PlanSummary { op: string; target: string; color: string | null; prompt: string; source: 'llm' | 'fallback'; engine?: string }
 /** What Generate sends: the words, plus optional overrides when re-running a changed plan. The server does everything else. */
 export interface InpaintParams { instruction: string; overrides?: EditOverrides }
 /** The one continuous stage: the editor stays mounted from Generate to the reveal and renders this in place. */
@@ -347,7 +347,7 @@ export function InpaintEditor({ source, busy, run, onSubmit, onCancel, onRerun }
         {run.time && <span className={styles.rsTime}>{run.time}</span>}
       </p>
       {run.hint && <p className={styles.rsHint}>{run.hint}</p>}
-      {run.plan && <p className={`${styles.rsPlan} ${styles.edFade}`}><span className={styles.rsPlanChip}>{planLine(run.plan)}</span>{run.plan.source === 'fallback' && <span className={styles.rsPlanNote}>basic plan</span>}</p>}
+      {run.plan && <p className={`${styles.rsPlan} ${styles.edFade}`}><span className={styles.rsPlanChip}>{planLine(run.plan)}</span>{run.plan.source === 'fallback' && <span className={styles.rsPlanNote}>basic plan</span>}{run.plan.engine && <span className={styles.rsPlanNote}>Engine: {ENGINE_OPTS.find(o => o.id === run.plan?.engine)?.label ?? run.plan.engine}</span>}</p>}
       {run.plan?.prompt && <p className={`${styles.rsPrompt} ${styles.edFade}`} title={run.plan.prompt}>{run.plan.prompt}</p>}
       {changeOpen && !run.final && <div className={styles.edPlan} role="group" aria-label="Change the plan">
         <div className={styles.edSeg3} role="group" aria-label="Edit type">

@@ -4,7 +4,7 @@
 export const EDIT_ENGINES = ['kontext', 'fluxfill', 'sdxl'] as const;
 export type EditEngine = (typeof EDIT_ENGINES)[number];
 export interface EditOverrides { op?: 'recolor' | 'replace' | 'remove'; color?: string; image_prompt?: string; strength?: number; engine?: EditEngine }
-export interface EditPlan { op: string; target: string; color: string | null; image_prompt: string; strength: number; source: 'llm' | 'fallback' }
+export interface EditPlan { op: string; target: string; color: string | null; image_prompt: string; strength: number; source: 'llm' | 'fallback'; engine?: string }
 export interface EditState {
   stage: 'planning' | 'selecting' | 'preparing' | 'queued' | 'generating' | 'done' | 'error' | 'cancelled';
   plan?: EditPlan; mask_preview?: string; job_id?: string; output?: { job_id: string }; error?: string; updated?: number; times?: Record<string, number>;

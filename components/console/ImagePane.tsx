@@ -17,7 +17,7 @@ const planLine = (pl: PlanSummary | null | undefined) => pl ? [pl.op[0].toUpperC
 
 const fmt = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const summary = (p: EditPlan | null): PlanSummary | null => p ? { op: p.op, target: p.target, color: p.color, prompt: p.image_prompt, source: p.source } : null;
+const summary = (p: EditPlan | null): PlanSummary | null => p ? { op: p.op, target: p.target, color: p.color, prompt: p.image_prompt, source: p.source, engine: p.engine } : null;
 
 /** Small JPEG data URL of the clean source photo (no mask overlay), kept so a reload can show the blurred stage. */
 async function makeThumb(blob: Blob): Promise<{ url: string; ar: number } | null> {
