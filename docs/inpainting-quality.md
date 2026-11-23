@@ -91,3 +91,20 @@ Live on proxmox02 (`/mnt/truenas/data/grtlabs-ai/image`; backups `*.bak-20261123
 - **Jacket to white t-shirt:** looks right (face intact, plain light t-shirt).
 - **Car remove: not solved.** Car body is gone, but the car's shadow and wheels sit outside the mask, LaMa extends them into a dark smear, and the refine pass keeps part of it and hallucinates a kerb. Next: shadow-aware downward dilation (~8-10% of box height) or a ground-shadow mask.
 - **Operational note:** do not edit `job-control.sh` while a job is running (bash reads it incrementally; the glasses job was marked error after the image was already validated).
+
+## Inpainting model switch (2026-11-23) - PARTIAL (tool-call budget exhausted; polling of the 15 s run_shell limit ate it)
+
+Goal: replace Krea Q2_K + Crop&Stitch (+LaMa, shadow/frame heuristics) by a real inpainting model, judged by LOOKING, plain masks only.
+
+Done (proxmox02, `/mnt/truenas/data/grtlabs-ai/image`):
+- relay.py: `overrides.plain=true` disables frame band, shadow extend, LaMa, thin-mask tweaks and the keep-shape clamp; `overrides.engine` now krea|sdxl|fluxfill (sdxl existed; default still krea). Backups `relay.py.bak-*-plain`, `*-flux`. New template `workflows/lustify-inpaint_flux-template.json` (UnetLoaderGGUF + DualCLIPLoaderGGUF + FluxGuidance 30 + ConditioningZeroOut + InpaintModelConditioning, euler/simple 20 steps, crop 1024) registered as mode `inpaint_flux`; NOT yet rendered.
+- SDXL checkpoint sha256 recorded: `ComfyUI/models/checkpoints/lustifySDXLNSFW_v20-inpainting.safetensors.sha256` = 615f2107...f8df84.
+- Flux Fill assets downloading by `/root/ctx/dl_flux.sh` (log /root/ctx/dl_flux.log, ~3.5 MB/s): flux1-fill-dev-Q4_K_S.gguf 6.8 GB (YarvixPA mirror rev 78b83f1d, sha 3782c22e...dc8; no Q4_K_M exists there; license "other" = FLUX.1 [dev] non-commercial), t5-v1_1-xxl-encoder-Q4_K_M.gguf (city96, sha 6be2b0b7...1af4), clip_l.safetensors (verified), ae.safetensors (sha afc8e282...e38 = official BFL ae, verified, .sha256 written).
+- Driver `/root/ctx/chain_eval.sh <engine> <tag> [cases]` (waits for idle GPU, runs cases via the real /edit; logs /root/ctx/chain_<tag>.log, results s_<tag>_<case>.json). Settings: plain, seed 1234, grow 10, context 1.5 (car, jacket) / 2.5 (face), strength 1.0 (car, jacket), 0.7 glasses, 0.9 beard; SDXL 28 steps cfg 6 dpmpp_2m karras, negative prompt active.
+
+Results:
+- SDXL glasses (job bfaf5187, plain mask = SAM lens+frame, denoise 0.7): generation 132 s, 271 s total, worker peak 1.7 GiB (cap 1.75). Frame gone and NO dark outline/seam. BUT eyes changed (wider, darker iris, younger look, heavier brows) and the dark band under the eyes (frame shadow) is still there/heavier. Verdict: seams solved, identity and shadow not.
+- SDXL car: first attempt failed in the planner (JSONDecodeError -> fallback, no parts); needs rerun. SDXL jacket and beard: queued in the chain, results in /root/ctx/s_sdxl_jacket.json, s_sdxl_beard.json, NOT viewed.
+- Flux Fill fit/speed: not measured. Risk: worker cap 1.75 GiB (SDXL load alone peaks 1.7), RuntimeMaxSec=900.
+
+Next: view s_sdxl_* jobs (vi.ps1 from Bash, not PowerShell: quoting), rerun car, run `chain_eval.sh fluxfill flux` after downloads end (ALLDONE in dl_flux.log), measure RSS/VRAM/s-per-step, decide default per op (nothing changed yet; default stays krea).
