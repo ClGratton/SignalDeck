@@ -135,3 +135,22 @@ Plain masks, seed 1234, judged by looking. Images in the session scratchpad: flu
 - GPU temp during Flux jobs 59-78 C, no throttle flags. Worker cap 1.75 GiB held, no OOM.
 - Kontext NOT evaluated: `dl_kontext.log` printed ALLDONE although curl had timed out after the SIGSTOP; flux1-kontext-dev-Q4_K_S.gguf was only 1.2 GB. Download resumed (`/root/ctx/dl_kontext.sh`, curl -C -), 5.4/6.8 GB at 12:03; sha256 (cc22ff7a...) must be verified (`.sha256` file appears only on success) before `chain_eval.sh kontext kon glasses car jacket beard` (RESTART=1 GS=1.0) and the glasses strength 0.45 variant.
 - Defaults: unchanged. Krea for txt2img. For add/replace-with-colour/remove no engine has been shown correct; SDXL and Flux Fill both PASS beard, both repaint objects on silhouette removal. Candidate for remove: Kontext + removal LoRA (untested). Replace colour needs the colour forced (white tee came out grey/navy).
+
+## Kontext results (FLUX.1 Kontext dev Q4_K_S + object-removal LoRA, 2026-11-23)
+
+Integrity: gguf sha256 cc22ff7a... matches the expected value; LoRA sha256 323857409920... verified. Results are trustworthy.
+GPU idle afterwards (no compute processes, 60 C). Settings common to all: engine=kontext, seed 1234, grow 10.
+
+- car (strength 1.0, ctx 1.5): NOT TESTED. Job d5cb28d7 failed before generation: the planner fell back and the selector could not locate the car ("Could not tell where that is"). This is a segmentation/prompt problem, not a Kontext verdict. Needs a tap or box on the car.
+- glasses, strength 1.0, ctx 2.5, mask 3.55%, job 1c11f86b-564e-4cda-a9e8-f295932879f9, 621 s: PARTIAL. Frames and cast shadow fully gone, skin continuous. But eyes/eyelids/brows regenerated: eyes narrower and heavier-lidded, brows darker and thicker, so identity drifts (same failure as Flux Fill, slightly cleaner skin).
+- glasses, strength 0.45, ctx 2.5, job dcf4406d-a0d8-4d4d-9ef2-638391867374, 626 s: FAIL. Output is visually the source: frames still present, nothing removed.
+- jacket to white tee (strength 1.0, ctx 1.5, mask 30.4%): NOT TESTED. Job 02df5553 errored with HTTPBadRequest from the edit backend (journal: "edit failed: HTTPBadRequest") after about 80 s, before generation.
+- beard (strength 0.9, ctx 2.5, mask 5.9%): NOT TESTED. Job 4b02bf02 errored with the same HTTPBadRequest.
+
+Open: the HTTPBadRequest on the jacket and beard runs (the glasses runs with the same template succeeded) is not diagnosed; check the Comfy 400 body.
+
+Proposed defaults (provisional, only glasses evidence from Kontext):
+- remove: keep Flux Fill/SDXL results as baseline; Kontext at strength 1.0 is the only Kontext setting that removes, and is no better on eyes. Do not switch until car removal is re-run with an explicit box.
+- clothing change: keep Flux (shape good, colour grey); Kontext untested.
+- add-to-face: keep SDXL/Flux (both PASS on beard); Kontext untested.
+No relay defaults changed.
