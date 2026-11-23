@@ -68,3 +68,15 @@ Live on proxmox02 (relay.py, plan.py, /opt/grtlabs-segment faceparse.py + segmen
 - Prompt template: "photo of the same man, same face, same lips and jaw shape, with <requested facial hair>, natural hair texture, same lighting"; planner system prompt instructs the same wording.
 - "keep the same shape/face/lips" caps denoise at 0.55 for add/replace. A user-drawn mask is never replaced by the auto face mask. Other ops unchanged (not calibrated).
 - Verified without GPU: parameter mappings by unit check; beard_nolip vs lip classes overlap = 0 px on the portrait upload (CPU onnxruntime).
+
+## Context fixes (2026-11-23) - PARTIAL (tool-call budget)
+
+Live on proxmox02 (`/mnt/truenas/data/grtlabs-ai/image`; backups `*.bak-20261123-*-ctx*` beside plan.py and relay.py).
+
+- Fill-first: ComfyUI custom node `Acly/comfyui-inpaint-nodes` pinned at commit 5b7681746fe19e563113d27366ba85236bc1ba5b (v1.4.4). Python reviewed before first load: no network, subprocess, or file writes; only `torch.load(weights_only=True)` for the unused Fooocus head and `torch.jit.load` for big-lama.pt (TorchScript, the model the README names). Model `models/inpaint/big-lama.pt`, sha256 344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9 (file `big-lama.pt.sha256` beside it).
+- New strict template `workflows/lustify-inpaint-remove-template.json` (same graph as lustify-inpaint plus nodes 16 LoadInpaintModel and 17 InpaintWithModel on the cropped image/mask; VAEEncode takes LaMa output). Relay mode `inpaint_remove`: used for op remove and replace (not facial hair, not eyewear, override `fill:false` disables). Template validation unchanged in strictness.
+- Strengths: remove 0.45-0.6 (default 0.55, grow 20, blend 20), replace 0.75-0.85 (default 0.8, grow 16). Eyewear removal skips LaMa (a lens mask would erase the eyes) and uses the plain template at 0.6 with a whole-person prompt.
+- Planner (plan.py): schema field `parts: [{name, box}]` (every named object/garment, own box); prompt rules: no negations, never name the removed object, describe the continuing surroundings; deterministic `clean_prompt()` strips negation clauses and, for remove, words of the target name.
+- Relay mask: union of SAM masks per part (a part mask over 85 percent of the image is dropped) plus BiSeNet `cloth` class for garment words on remove/replace.
+- GET /edit/<id> plan now carries parts (names), mask_area, grow, blend, context, template, fill, strength.
+- Verified: nodes load, planner returns parts for the jacket edit (suit jacket, shirt, tie, clothes-parse; mask area 30.4 percent of the image, previously only half a jacket), prompt sanitizer unit-checked. Render results: see the note below.
