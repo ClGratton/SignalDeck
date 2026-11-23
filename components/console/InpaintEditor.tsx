@@ -29,6 +29,8 @@ const planLine = (pl: PlanSummary) => [pl.op[0].toUpperCase() + pl.op.slice(1), 
 const ENGINE_OPTS: Array<{ id: EditEngine | 'auto'; label: string }> = [
   { id: 'auto', label: 'Auto' }, { id: 'kontext', label: 'Kontext' }, { id: 'fluxfill', label: 'Flux Fill' }, { id: 'sdxl', label: 'SDXL' },
 ];
+// Labels for relay-chosen engines that are not user-selectable (no toggle): shown in the plan note only.
+const ENGINE_LABEL: Record<string, string> = { krea: 'Krea' };
 type Tool = 'select' | 'subtract' | 'brush' | 'erase';
 type Prep = 'preparing' | 'ready' | 'error';
 const TOOLS: Array<{ id: Tool; label: string; Icon: typeof Brush }> = [
@@ -347,7 +349,7 @@ export function InpaintEditor({ source, busy, run, onSubmit, onCancel, onRerun }
         {run.time && <span className={styles.rsTime}>{run.time}</span>}
       </p>
       {run.hint && <p className={styles.rsHint}>{run.hint}</p>}
-      {run.plan && <p className={`${styles.rsPlan} ${styles.edFade}`}><span className={styles.rsPlanChip}>{planLine(run.plan)}</span>{run.plan.source === 'fallback' && <span className={styles.rsPlanNote}>basic plan</span>}{run.plan.engine && <span className={styles.rsPlanNote}>Engine: {ENGINE_OPTS.find(o => o.id === run.plan?.engine)?.label ?? run.plan.engine}</span>}</p>}
+      {run.plan && <p className={`${styles.rsPlan} ${styles.edFade}`}><span className={styles.rsPlanChip}>{planLine(run.plan)}</span>{run.plan.source === 'fallback' && <span className={styles.rsPlanNote}>basic plan</span>}{run.plan.engine && <span className={styles.rsPlanNote}>Engine: {ENGINE_OPTS.find(o => o.id === run.plan?.engine)?.label ?? ENGINE_LABEL[run.plan.engine] ?? run.plan.engine}</span>}</p>}
       {run.plan?.prompt && <p className={`${styles.rsPrompt} ${styles.edFade}`} title={run.plan.prompt}>{run.plan.prompt}</p>}
       {changeOpen && !run.final && <div className={styles.edPlan} role="group" aria-label="Change the plan">
         <div className={styles.edSeg3} role="group" aria-label="Edit type">
