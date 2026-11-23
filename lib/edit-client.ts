@@ -1,6 +1,9 @@
 // Client for the server-driven edit pipeline (/api/assistant/images/edit). The server does all the work; this only
 // starts it, shows its state, and reconnects at will. No model, no segmentation and no chaining run in the browser.
-export interface EditOverrides { op?: 'recolor' | 'replace' | 'remove'; color?: string; image_prompt?: string; strength?: number }
+/** Engines the user may pick; "Auto" sends nothing and the relay chooses. Mirrors the relay's per-request `engine` override. */
+export const EDIT_ENGINES = ['kontext', 'fluxfill', 'sdxl'] as const;
+export type EditEngine = (typeof EDIT_ENGINES)[number];
+export interface EditOverrides { op?: 'recolor' | 'replace' | 'remove'; color?: string; image_prompt?: string; strength?: number; engine?: EditEngine }
 export interface EditPlan { op: string; target: string; color: string | null; image_prompt: string; strength: number; source: 'llm' | 'fallback' }
 export interface EditState {
   stage: 'planning' | 'selecting' | 'preparing' | 'queued' | 'generating' | 'done' | 'error' | 'cancelled';

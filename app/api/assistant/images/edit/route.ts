@@ -6,6 +6,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 const json = (body: unknown, status: number) => NextResponse.json(body, { status });
+const ENGINES: string[] = ['kontext', 'fluxfill', 'sdxl'];
 const ID = /^[0-9a-f]{32}$/;
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -34,8 +35,11 @@ export async function POST(req: NextRequest) {
     }
     if (typeof overrides === 'string' && overrides) {
       if (overrides.length > 2000) return json({ error: 'Invalid overrides.' }, 400);
-      try { if (typeof JSON.parse(overrides) !== 'object') throw new Error(); } catch { return json({ error: 'Invalid overrides.' }, 400); }
-      out.set('overrides', overrides);
+      let parsed: Record<string, unknown>;
+      try { const v = JSON.parse(overrides); if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(); parsed = v; } catch { return json({ error: 'Invalid overrides.' }, 400); }
+      // `engine` is optional (absent = Auto, the relay picks); anything outside the allowlist is refused, never forwarded.
+      if ('engine' in parsed && (typeof parsed.engine !== 'string' || !ENGINES.includes(parsed.engine))) return json({ error: 'Unknown engine.' }, 400);
+      out.set('overrides', JSON.stringify(parsed));
     }
     const res = await relayFetch('/edit', { method: 'POST', body: out }, 40000);
     if (res.status === 400) {

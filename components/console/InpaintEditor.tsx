@@ -7,7 +7,7 @@ import { embedImage, predictMask, type Box, type Embedding } from '@/lib/segment
 import { IDENTITY, clampView, gestureView, screenToImage, zoomAt, type View } from '@/lib/view-transform';
 import { encodeMaskPng } from '@/lib/png-mask';
 import { Button, Field } from '@/components/ui';
-import type { EditOverrides } from '@/lib/edit-client';
+import type { EditOverrides, EditEngine } from '@/lib/edit-client';
 
 // Mirrors the relay's rules (relay.py _inpaint_prepare): 64..3072 px per side, <= 9.5 MP, mask == image size, binary mask.
 const MAX_SIDE = 2048;
@@ -26,6 +26,9 @@ export interface RunView {
 type Op3 = 'recolor' | 'replace' | 'remove';
 const op3 = (op: string): Op3 => (op === 'recolor' ? 'recolor' : op === 'remove' ? 'remove' : 'replace');
 const planLine = (pl: PlanSummary) => [pl.op[0].toUpperCase() + pl.op.slice(1), pl.target, pl.color].filter(Boolean).join(' \u00b7 ');
+const ENGINE_OPTS: Array<{ id: EditEngine | 'auto'; label: string }> = [
+  { id: 'auto', label: 'Auto' }, { id: 'kontext', label: 'Kontext' }, { id: 'fluxfill', label: 'Flux Fill' }, { id: 'sdxl', label: 'SDXL' },
+];
 type Tool = 'select' | 'subtract' | 'brush' | 'erase';
 type Prep = 'preparing' | 'ready' | 'error';
 const TOOLS: Array<{ id: Tool; label: string; Icon: typeof Brush }> = [
@@ -72,6 +75,7 @@ export function InpaintEditor({ source, busy, run, onSubmit, onCancel, onRerun }
   const [prep, setPrep] = useState<Prep>('preparing');
   const [segBusy, setSegBusy] = useState(false);
   const [instruction, setInstruction] = useState('');
+  const [engine, setEngine] = useState<EditEngine | 'auto'>('auto');
   const [changeOpen, setChangeOpen] = useState(false);
   const [chOp, setChOp] = useState<Op3>('recolor');
   const [chPrompt, setChPrompt] = useState('');
@@ -293,7 +297,7 @@ export function InpaintEditor({ source, busy, run, onSubmit, onCancel, onRerun }
     if (imgBlob && imgBlob.size > 10 * 1024 * 1024) imgBlob = await new Promise<Blob | null>(r => imgRef.current!.toBlob(r, 'image/jpeg', 0.95));
     if (!imgBlob || imgBlob.size > 12 * 1024 * 1024) { setErr('The photo is too large to send even after resizing. Try a smaller one.'); return; }
     if (maskBlob && maskBlob.size > 4 * 1024 * 1024) { setErr('The selection is too large to send.'); return; }
-    onSubmit(imgBlob, maskBlob, { instruction: text });
+    onSubmit(imgBlob, maskBlob, engine === 'auto' ? { instruction: text } : { instruction: text, overrides: { engine } });
   }
   function openChange() {
     if (run?.plan) { setChOp(op3(run.plan.op)); setChPrompt(run.plan.prompt); setChColor(run.plan.color ?? ''); }
@@ -302,7 +306,7 @@ export function InpaintEditor({ source, busy, run, onSubmit, onCancel, onRerun }
   function rerun() {
     const color = chOp === 'recolor' && chColor.trim() ? chColor.trim() : undefined;
     setChangeOpen(false);
-    onRerun?.({ op: chOp, image_prompt: chPrompt.trim() || undefined, color });
+    onRerun?.({ op: chOp, image_prompt: chPrompt.trim() || undefined, color, ...(engine === 'auto' ? {} : { engine }) });
   }
 
   const status = prep === 'preparing' ? 'Preparing selection…' : segBusy ? 'Selecting…' : '';
@@ -363,6 +367,13 @@ export function InpaintEditor({ source, busy, run, onSubmit, onCancel, onRerun }
         placeholder="e.g. make the car white" hint="Plain words are enough. Select an area first, or leave it and the server finds it for you."
         onChange={e => setInstruction(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit(); } }} />
+      <div className={styles.edEngine} role="group" aria-label="Engine">
+        <span className={styles.edEngineLbl} id="ed-engine-lbl">Engine</span>
+        <div className={styles.edSeg} role="group" aria-labelledby="ed-engine-lbl">
+          {ENGINE_OPTS.map(o => <button key={o.id} type="button" aria-pressed={engine === o.id} disabled={busy} onClick={() => setEngine(o.id)}>{o.label}</button>)}
+        </div>
+        <span className={styles.edEngineHint}>{engine === 'auto' ? 'Auto picks the best engine for the edit.' : 'Used for this edit only.'}</span>
+      </div>
       {note && <p role="status" className={styles.imageNote}>{note}</p>}
       {err && <p role="alert" className={styles.imageError}>{err}</p>}
       <div className={styles.edActions}>
